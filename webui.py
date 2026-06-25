@@ -473,6 +473,9 @@ def _start_proxy_instance(port):
     from http.server import HTTPServer, BaseHTTPRequestHandler
     from urllib.parse import urlparse
 
+    proxy_state["running"] = True
+    proxy_state["port"] = port
+
     _cfg = load_config()
     _cfg["port"] = port
 
