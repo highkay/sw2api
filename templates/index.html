@@ -306,7 +306,7 @@ function switchTab(name) {
   document.querySelectorAll('.tab-content').forEach(p => p.classList.toggle('active', p.id === 'panel-' + name));
   if (name === 'dashboard') refreshDashboard();
   if (name === 'proxy') { refreshProxyStatus(); loadStrategy(); }
-  if (name === 'accounts') loadAccounts();
+  if (name === 'accounts') loadAccounts(true);
   if (name === 'apikeys') loadApiKeys();
 }
 
@@ -414,7 +414,7 @@ async function toggleAccount(email, action) {
   if (r && r.success) {
     toast(email.split('@')[0] + ' ' + (action === 'disable' ? 'disabled' : 'enabled'), 'success');
     refreshAccounts();
-    loadAccounts();
+    loadAccounts(true);
   }
 }
 
@@ -575,12 +575,13 @@ async function logout() {
 // ─── Accounts ───
 let _accountsData = null;
 
-async function loadAccounts() {
+async function loadAccounts(silent) {
   const r = await api('/api/accounts', {silent:true});
   if (!r) { document.getElementById('accountsList').innerHTML = '<span class="text-red-600 text-sm">Failed to load accounts</span>'; return; }
   _accountsData = r.accounts || [];
   const cols = document.getElementById('acctCols')?.value || 2;
   renderAccounts(cols);
+  if (!silent) toast('Refreshed ' + _accountsData.length + ' accounts', 'success');
 }
 
 function renderAccounts(cols) {
