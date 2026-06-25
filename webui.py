@@ -839,6 +839,8 @@ def api_accounts_refresh_usage():
         save_config(cfg)
 
     return jsonify({"success": True, "enabled": enabled_count, "total": len(accounts)})
+
+@app.route("/api/accounts/enable", methods=["POST"])
 def api_accounts_enable():
     cfg = load_config()
     email = request.json.get("email", "").strip()

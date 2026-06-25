@@ -437,42 +437,31 @@ function renderAccountStatus(accts) {
     return;
   }
 
-  const details = accts.details || [];
-  let detailRows = '';
-  if (details.length > 0) {
-    detailRows = details.map(a => {
-      let badge = '';
-      let btn = '';
-      if (a.disabled) {
-        badge = '<span class="text-xs font-medium px-2 py-0.5 rounded-full bg-slate-100 text-slate-500">Disabled</span>';
-        btn = `<button class="text-xs px-2 py-0.5 rounded bg-emerald-600 text-white hover:bg-emerald-700 ml-auto shrink-0" onclick="event.stopPropagation();toggleAccount('${a.email.replace(/'/g,"\\'")}','enable')">Enable</button>`;
-      } else {
-        badge = '<span class="text-xs font-medium px-2 py-0.5 rounded-full bg-emerald-100 text-emerald-700">Available</span>';
-        btn = `<button class="text-xs px-2 py-0.5 rounded bg-slate-200 text-slate-600 hover:bg-slate-300 ml-auto shrink-0" onclick="event.stopPropagation();toggleAccount('${a.email.replace(/'/g,"\\'")}','disable')">Disable</button>`;
-      }
-      const emailShort = a.email ? a.email.split('@')[0] : 'unknown';
-      return `<div class="flex items-center gap-2 py-1.5 border-b border-slate-100 last:border-0">
-        <span class="text-xs text-slate-600 truncate" title="${escHtml(a.email)}">${escHtml(emailShort)}</span>
-        ${badge}
-        ${btn}
-      </div>`;
-    }).join('');
-  }
-
   el.innerHTML = `
-    <div class="grid grid-cols-2 gap-3 mb-4">
+    <div class="grid grid-cols-3 gap-3 mb-4">
       <div class="bg-emerald-50 rounded-xl p-5 text-center">
         <div class="text-sm text-emerald-600 font-medium">Available</div>
         <div class="text-3xl font-bold text-emerald-700 mt-1">${avail}</div>
         <div class="text-xs text-emerald-500 mt-1">Ready to serve</div>
       </div>
-      <div class="bg-slate-50 rounded-xl p-5 text-center">
-        <div class="text-sm text-slate-500 font-medium">Disabled</div>
-        <div class="text-3xl font-bold text-slate-600 mt-1">${dis}</div>
-        <div class="text-xs text-slate-400 mt-1">限流/手动禁用</div>
+      <div class="bg-amber-50 rounded-xl p-5 text-center">
+        <div class="text-sm text-amber-600 font-medium">Cooldown</div>
+        <div class="text-3xl font-bold text-amber-700 mt-1">${dis}</div>
+        <div class="text-xs text-amber-500 mt-1">限额用尽/禁用</div>
+      </div>
+      <div class="bg-red-50 rounded-xl p-5 text-center">
+        <div class="text-sm text-red-600 font-medium">Blocked</div>
+        <div class="text-3xl font-bold text-red-700 mt-1">0</div>
+        <div class="text-xs text-red-500 mt-1">403 封禁封号</div>
       </div>
     </div>
-    <div class="max-h-60 overflow-y-auto">${detailRows}</div>`;
+    <div class="max-h-60 overflow-y-auto">${(accts.details||[]).map(a => {
+      const emailEsc = a.email.replace(/'/g,"\\'");
+      const badge = a.disabled ? '<span class="text-xs font-medium px-2 py-0.5 rounded-full bg-amber-100 text-amber-700">Cooldown</span>'
+        : '<span class="text-xs font-medium px-2 py-0.5 rounded-full bg-emerald-100 text-emerald-700">Available</span>';
+      const act = a.disabled ? 'enable' : 'disable';
+      return '<div class="flex items-center gap-2 py-1.5 border-b border-slate-100 last:border-0"><span class="text-xs text-slate-600 truncate" title="'+escHtml(a.email)+'">'+escHtml(a.email.split('@')[0])+'</span>'+badge+'<button class="text-xs px-2 py-0.5 rounded '+ (a.disabled ? 'bg-emerald-600 text-white hover:bg-emerald-700' : 'bg-slate-200 text-slate-600 hover:bg-slate-300') +' ml-auto shrink-0" onclick="toggleAccount(\''+emailEsc+'\',\''+act+'\')">'+ (a.disabled ? 'Enable' : 'Disable') +'</button></div>';
+    }).join('')}</div>`;
 }
 
 function renderAvailabilityGrid(slots) {
