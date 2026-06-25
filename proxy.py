@@ -145,9 +145,12 @@ def get_available_accounts(cfg, now=None):
     accounts = cfg.get("accounts", {})
     available = []
     for email in accounts:
+        acct = accounts[email]
+        if acct.get("disabled"):
+            continue
         state = get_account_state(email)
         if state.is_available(now):
-            available.append((email, accounts[email]))
+            available.append((email, acct))
     available.sort(key=lambda x: x[0])
     return available
 
@@ -163,9 +166,11 @@ def select_account(cfg, strategy, specific_email=None):
     if strategy == STRATEGY_SPECIFIC:
         email = specific_email or cfg.get("activeAccount")
         if email and email in accounts:
-            state = get_account_state(email)
-            if state.is_available():
-                return email, accounts[email]
+            acct = accounts[email]
+            if not acct.get("disabled"):
+                state = get_account_state(email)
+                if state.is_available():
+                    return email, acct
         return None, None
 
     available = get_available_accounts(cfg)
@@ -184,7 +189,9 @@ def select_account(cfg, strategy, specific_email=None):
 
     email = cfg.get("activeAccount")
     if email and email in accounts:
-        return email, accounts[email]
+        acct = accounts[email]
+        if not acct.get("disabled"):
+            return email, acct
     return None, None
 
 

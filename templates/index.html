@@ -416,6 +416,14 @@ async function refreshAccounts() {
   btn.textContent = 'Refresh';
 }
 
+async function toggleAccount(email, action) {
+  const r = await api(`/api/accounts/${action}`, {body:{email}});
+  if (r && r.success) {
+    toast(email.split('@')[0] + ' ' + (action === 'disable' ? 'disabled' : 'enabled'), 'success');
+    refreshAccounts();
+  }
+}
+
 function renderAccountStatus(accts) {
   const el = document.getElementById('dashAccounts');
   if (!accts) {
@@ -437,17 +445,25 @@ function renderAccountStatus(accts) {
   if (details.length > 0) {
     detailRows = details.map(a => {
       let badge = '';
-      if (a.blocked || a.banned) {
+      let btn = '';
+      if (a.disabled) {
+        badge = '<span class="text-xs font-medium px-2 py-0.5 rounded-full bg-slate-100 text-slate-500">Disabled</span>';
+        btn = `<button class="text-xs px-2 py-0.5 rounded bg-emerald-600 text-white hover:bg-emerald-700 ml-auto shrink-0" onclick="event.stopPropagation();toggleAccount('${a.email.replace(/'/g,"\\'")}','enable')">Enable</button>`;
+      } else if (a.blocked || a.banned) {
         badge = '<span class="text-xs font-medium px-2 py-0.5 rounded-full bg-red-100 text-red-700">Blocked</span>';
+        btn = `<button class="text-xs px-2 py-0.5 rounded bg-slate-200 text-slate-600 hover:bg-slate-300 ml-auto shrink-0" onclick="event.stopPropagation();toggleAccount('${a.email.replace(/'/g,"\\'")}','disable')">Disable</button>`;
       } else if (a.cooldown) {
         badge = '<span class="text-xs font-medium px-2 py-0.5 rounded-full bg-amber-100 text-amber-700">Cooldown</span>';
+        btn = `<button class="text-xs px-2 py-0.5 rounded bg-slate-200 text-slate-600 hover:bg-slate-300 ml-auto shrink-0" onclick="event.stopPropagation();toggleAccount('${a.email.replace(/'/g,"\\'")}','disable')">Disable</button>`;
       } else {
         badge = '<span class="text-xs font-medium px-2 py-0.5 rounded-full bg-emerald-100 text-emerald-700">Available</span>';
+        btn = `<button class="text-xs px-2 py-0.5 rounded bg-slate-200 text-slate-600 hover:bg-slate-300 ml-auto shrink-0" onclick="event.stopPropagation();toggleAccount('${a.email.replace(/'/g,"\\'")}','disable')">Disable</button>`;
       }
       const emailShort = a.email ? a.email.split('@')[0] : 'unknown';
       return `<div class="flex items-center gap-2 py-1.5 border-b border-slate-100 last:border-0">
-        <span class="text-xs text-slate-600 truncate flex-1" title="${escHtml(a.email)}">${escHtml(emailShort)}</span>
+        <span class="text-xs text-slate-600 truncate" title="${escHtml(a.email)}">${escHtml(emailShort)}</span>
         ${badge}
+        ${btn}
       </div>`;
     }).join('');
   }

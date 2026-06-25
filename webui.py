@@ -191,16 +191,20 @@ def api_dashboard():
     for email, acct in accounts:
         state = get_account_state(email)
         is_banned = state.banned
-        if is_banned:
+        is_disabled = acct.get("disabled", False)
+        if is_disabled:
+            account_details.append({"email": email, "banned": False, "blocked": False, "cooldown": False, "disabled": True, "quota": None})
+        elif is_banned:
             account_details.append({"email": email, "banned": True, "blocked": True, "cooldown": False, "quota": None})
         elif not state.is_available():
             account_details.append({"email": email, "banned": False, "blocked": False, "cooldown": True, "quota": None})
         else:
             account_details.append({"email": email, "banned": False, "blocked": False, "cooldown": False, "quota": None})
 
-    available_count = sum(1 for d in account_details if not d["cooldown"] and not d["blocked"])
+    available_count = sum(1 for d in account_details if not d["cooldown"] and not d["blocked"] and not d.get("disabled"))
     cooldown_count = sum(1 for d in account_details if d["cooldown"])
     blocked_count = sum(1 for d in account_details if d["blocked"])
+    disabled_count = sum(1 for d in account_details if d.get("disabled"))
 
     return jsonify({
         "availability": health_tracker.get_availability(),
@@ -213,6 +217,7 @@ def api_dashboard():
         "accounts": {
             "total": total_accounts,
             "available": available_count,
+            "disabled": disabled_count,
             "cooldown": cooldown_count,
             "blocked": blocked_count,
             "details": account_details,
@@ -787,6 +792,28 @@ def api_accounts_switch():
     cfg["activeAccount"] = email
     save_config(cfg)
     return jsonify({"success": True, "activeAccount": email})
+
+
+@app.route("/api/accounts/disable", methods=["POST"])
+def api_accounts_disable():
+    cfg = load_config()
+    email = request.json.get("email", "").strip()
+    if email not in cfg.get("accounts", {}):
+        return jsonify({"error": "Account not found"}), 404
+    cfg["accounts"][email]["disabled"] = True
+    save_config(cfg)
+    return jsonify({"success": True, "email": email, "disabled": True})
+
+
+@app.route("/api/accounts/enable", methods=["POST"])
+def api_accounts_enable():
+    cfg = load_config()
+    email = request.json.get("email", "").strip()
+    if email not in cfg.get("accounts", {}):
+        return jsonify({"error": "Account not found"}), 404
+    cfg["accounts"][email]["disabled"] = False
+    save_config(cfg)
+    return jsonify({"success": True, "email": email, "disabled": False})
 
 
 @app.route("/api/accounts/remove", methods=["POST"])
