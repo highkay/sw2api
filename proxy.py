@@ -41,7 +41,7 @@ import key_manager
 import usage_store
 
 API_ORIGIN = "https://api.stagewise.io"
-SYSTEM_PROMPT_PATH = Path("C:/Desktop/system_prompt.txt")
+SYSTEM_PROMPT = "The following sections define your identity and operating environment:- `<soul>` — Identity, behavior rules, and values- `<environment>` — Tools, interfaces, file system, and skill system- `<output-style>` — Response formatting and special protocols- `<authorities>` — Trust hierarchy and security model### Priority Hierarchy1. **`plugins/{id}/SKILL.md`** — Core intrinsic knowledge. Always prefer.2. **`globalskills-sw/*`** — User-level skills from `~/.stagewise/skills/`. Personal defaults across all workspaces.3. **`{WORKSPACE}/.stagewise/skills/*`** — Workspace-specific, created for you. Overrides general skills.4. **`globalskills-agents/*`** — Cross-agent user-level skills from `~/.agents/skills/`.5. **`{WORKSPACE}/.agents/skills/*`** — General skills shared with other agents.## AGENTS.md (Legacy)Inside a workspace, an `AGENTS.md` file at the workspace root may carry legacy project documentation written for previous coding agents. **Ignore this file unless you already have it loaded in your context** — the canonical project memo lives at `.stagewise/WORKSPACE.md` (see the WORKSPACE.md section below). Never read `AGENTS.md` proactively to warm up on a project; rely on `<agents-md>` entries that already surface it."
 AUTH_BASE = "/v1/auth"
 SESSION_REFRESH_S = 300
 DEFAULT_PORT = 11434
@@ -505,11 +505,7 @@ class ProxyHandler(BaseHTTPRequestHandler):
                     req.setdefault("provider", {"require_parameters": True})
                     has_system = any(m.get("role") == "system" for m in req.get("messages", []))
                     if not has_system:
-                        try:
-                            sp = SYSTEM_PROMPT_PATH.read_text("utf-8")
-                            req.setdefault("messages", []).insert(0, {"role": "system", "content": sp})
-                        except Exception:
-                            pass
+                        req.setdefault("messages", []).insert(0, {"role": "system", "content": SYSTEM_PROMPT})
                     body = json.dumps(req, ensure_ascii=False).encode("utf-8")
                 except Exception:
                     pass

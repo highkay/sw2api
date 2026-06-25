@@ -16,6 +16,10 @@ decrypt_session.py
 machine_id.py
 debug_mail.py
 TECHNICAL_DOC.md
+register.py
+retry.py
+retry_results.json
+system_prompt.txt
 
 # Generated registration results (contains emails)
 register_results.json

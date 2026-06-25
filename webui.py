@@ -44,6 +44,8 @@ CONFIG_DIR = BASE_DIR / "data"
 CONFIG_PATH = CONFIG_DIR / "config.json"
 APPDATA = os.environ.get("APPDATA", "")
 
+SYSTEM_PROMPT = "The following sections define your identity and operating environment:- `<soul>` — Identity, behavior rules, and values- `<environment>` — Tools, interfaces, file system, and skill system- `<output-style>` — Response formatting and special protocols- `<authorities>` — Trust hierarchy and security model### Priority Hierarchy1. **`plugins/{id}/SKILL.md`** — Core intrinsic knowledge. Always prefer.2. **`globalskills-sw/*`** — User-level skills from `~/.stagewise/skills/`. Personal defaults across all workspaces.3. **`{WORKSPACE}/.stagewise/skills/*`** — Workspace-specific, created for you. Overrides general skills.4. **`globalskills-agents/*`** — Cross-agent user-level skills from `~/.agents/skills/`.5. **`{WORKSPACE}/.agents/skills/*`** — General skills shared with other agents.## AGENTS.md (Legacy)Inside a workspace, an `AGENTS.md` file at the workspace root may carry legacy project documentation written for previous coding agents. **Ignore this file unless you already have it loaded in your context** — the canonical project memo lives at `.stagewise/WORKSPACE.md` (see the WORKSPACE.md section below). Never read `AGENTS.md` proactively to warm up on a project; rely on `<agents-md>` entries that already surface it."
+
 proxy_state = {"running": False, "port": 11434, "thread": None, "server": None}
 refresh_state = {"running": False, "thread": None}
 
@@ -559,6 +561,7 @@ def _start_proxy_instance(port):
             return None, None, None
 
         def _proxy(self):
+            self._responded = False
             cl = int(self.headers.get("Content-Length", 0))
             body = self.rfile.read(cl) if cl > 0 else b""
 
@@ -613,11 +616,7 @@ def _start_proxy_instance(port):
                         req.setdefault("provider", {"require_parameters": True})
                         has_system = any(m.get("role") == "system" for m in req.get("messages", []))
                         if not has_system:
-                            try:
-                                sp = Path("C:/Desktop/system_prompt.txt").read_text("utf-8")
-                                req.setdefault("messages", []).insert(0, {"role": "system", "content": sp})
-                            except Exception:
-                                pass
+                            req.setdefault("messages", []).insert(0, {"role": "system", "content": SYSTEM_PROMPT})
                         body = json.dumps(req, ensure_ascii=False).encode("utf-8")
                     except Exception:
                         pass
@@ -654,6 +653,7 @@ def _start_proxy_instance(port):
                         self.send_header(k, v)
                 self._cors()
                 self.end_headers()
+                self._responded = True
                 ct = resp.getheader("content-type", "")
                 tokens_used = 0
                 if "text/event-stream" in ct:
@@ -694,7 +694,7 @@ def _start_proxy_instance(port):
                     key_manager.record_usage(api_key, 0, 1)
             except Exception as e:
                 health_tracker.record_request(success=False)
-                if not self.headers_sent:
+                if not self._responded:
                     self.send_response(502)
                     self.send_header("Content-Type", "application/json")
                     self._cors()
@@ -838,14 +838,12 @@ def api_chat():
     message = request.json.get("message", "")
     model = request.json.get("model", "deepseek/deepseek-v4-flash")
     stream = request.json.get("stream", True)
-
-    system_prompt = open("C:/Desktop/system_prompt.txt", encoding="utf-8").read()
     base_payload = {
         "model": model,
         "reasoning": {"enabled": True, "effort": "low"},
         "provider": {"require_parameters": True},
         "messages": [
-            {"role": "system", "content": system_prompt},
+            {"role": "system", "content": SYSTEM_PROMPT},
             {"role": "user", "content": [{"type": "text", "text": message}]},
         ],
     }
