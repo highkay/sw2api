@@ -61,6 +61,38 @@ client = OpenAI(
 | `fill_first` | 按邮箱排序，连续使用第一个可用账号，冷却后自动切到下一个 | 最大化利用滚动窗口配额 |
 | `round_robin` | 全局游标轮询所有可用账号 | 负载均衡 |
 
+## 开放 API（注册机对接）
+
+### 发送验证码
+
+```bash
+curl -X POST http://localhost:8080/api/send-otp \
+  -H "Content-Type: application/json" \
+  -d '{"email": "user@example.com"}'
+
+# 响应
+{"success": true, "message": "OTP sent", "email": "user@example.com"}
+```
+
+### 验证 OTP 并添加账号
+
+```bash
+curl -X POST http://localhost:8080/api/verify-otp \
+  -H "Content-Type: application/json" \
+  -d '{"email": "user@example.com", "otp": "123456"}'
+
+# 响应（返回完整 token）
+{
+  "success": true,
+  "token": "<full-session-token>",
+  "token_preview": "<truncated>...",
+  "email": "user@example.com",
+  "activeAccount": "user@example.com"
+}
+```
+
+验证成功后自动保存到 `config.json` 并设为活跃账号。
+
 ## 项目结构
 
 ```
@@ -72,3 +104,7 @@ usage_store.py     — Token 用量持久化
 templates/
   index.html       — 前端界面
 ```
+
+---
+
+社区：[Linux.do](https://linux.do/)
