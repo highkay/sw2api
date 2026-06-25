@@ -1,0 +1,879 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>stagewise WebUI</title>
+<script src="https://cdn.tailwindcss.com"></script>
+<script>
+tailwind.config = {
+  theme: {
+    extend: {
+      colors: {
+        accent: { DEFAULT: '#4f46e5', light: '#6366f1', dark: '#4338ca' },
+      }
+    }
+  }
+}
+</script>
+<style>
+.tab-content { display: none; }
+.tab-content.active { display: block; }
+.progress-fill { transition: width .5s; }
+.toast { animation: slideIn .3s; }
+@keyframes slideIn { from{transform:translateX(100px);opacity:0} to{transform:translateX(0);opacity:1} }
+.spinner { display:inline-block; width:14px; height:14px; border:2px solid #e2e8f0; border-top-color:#4f46e5; border-radius:50%; animation:spin .6s linear infinite; vertical-align:middle; }
+@keyframes spin { to{transform:rotate(360deg)} }
+.chat-msg { margin-bottom:12px; padding:10px 14px; border-radius:8px; font-size:14px; line-height:1.6; }
+.chat-msg.user { background:#4f46e5; color:#fff; margin-left:40px; }
+.chat-msg.assistant { background:#f1f5f9; color:#1e293b; margin-right:40px; border:1px solid #e2e8f0; }
+.chat-msg.system { background:transparent; color:#94a3b8; font-size:12px; text-align:center; }
+</style>
+</head>
+<body class="bg-white text-slate-700 min-h-screen">
+
+<div class="bg-white border-b border-slate-200 px-6 py-3 flex items-center gap-4 shadow-sm">
+  <h1 class="text-lg font-bold text-slate-900">stageway WebUI</h1>
+  <span class="text-xs font-medium px-2 py-0.5 rounded bg-indigo-100 text-indigo-700">v1.10.2</span>
+  <span id="acctBadge" class="text-xs font-medium px-2 py-0.5 rounded bg-emerald-100 text-emerald-700">0 accounts</span>
+  <div class="flex-1"></div>
+  <span id="globalStatus" class="text-sm text-slate-500"></span>
+</div>
+
+<div class="border-b border-slate-200 bg-white px-6 flex overflow-x-auto gap-1">
+  <a href="/dashboard" class="tab-btn px-4 py-3 text-sm font-medium text-slate-500 border-b-2 border-transparent cursor-pointer hover:text-slate-700 no-underline" data-tab="dashboard">Dashboard</a>
+  <a href="/login" class="tab-btn px-4 py-3 text-sm font-medium text-slate-500 border-b-2 border-transparent cursor-pointer hover:text-slate-700 no-underline" data-tab="login">Login</a>
+  <a href="/accounts" class="tab-btn px-4 py-3 text-sm font-medium text-slate-500 border-b-2 border-transparent cursor-pointer hover:text-slate-700 no-underline" data-tab="accounts">Accounts</a>
+  <a href="/chat" class="tab-btn px-4 py-3 text-sm font-medium text-slate-500 border-b-2 border-transparent cursor-pointer hover:text-slate-700 no-underline" data-tab="chat">Chat</a>
+  <a href="/api-explorer" class="tab-btn px-4 py-3 text-sm font-medium text-slate-500 border-b-2 border-transparent cursor-pointer hover:text-slate-700 no-underline" data-tab="api">API Explorer</a>
+  <a href="/proxy" class="tab-btn px-4 py-3 text-sm font-medium text-slate-500 border-b-2 border-transparent cursor-pointer hover:text-slate-700 no-underline" data-tab="proxy">Proxy</a>
+  <a href="/apikeys" class="tab-btn px-4 py-3 text-sm font-medium text-slate-500 border-b-2 border-transparent cursor-pointer hover:text-slate-700 no-underline" data-tab="apikeys">API Keys</a>
+</div>
+
+<div class="max-w-7xl mx-auto p-6">
+
+<!-- ═══ Dashboard ═══ -->
+<div class="tab-content active" id="panel-dashboard">
+  <!-- Row 1: Token quota cards + proxy status -->
+  <div class="grid grid-cols-4 gap-5 mb-5">
+    <div class="bg-white rounded-xl border border-slate-200 p-6 shadow-sm">
+      <div class="text-sm text-slate-500 mb-2">Daily Token</div>
+      <div class="text-2xl font-bold text-slate-900" id="dashDailyToken">-</div>
+      <div class="mt-3 bg-slate-100 rounded h-3 overflow-hidden"><div class="h-full rounded transition-all duration-500" id="dashDailyBar" style="width:0%;background:#22c55e"></div></div>
+      <div class="text-xs text-slate-400 mt-1.5" id="dashDailyLabel">-</div>
+    </div>
+    <div class="bg-white rounded-xl border border-slate-200 p-6 shadow-sm">
+      <div class="text-sm text-slate-500 mb-2">Weekly Token</div>
+      <div class="text-2xl font-bold text-slate-900" id="dashWeeklyToken">-</div>
+      <div class="mt-3 bg-slate-100 rounded h-3 overflow-hidden"><div class="h-full rounded transition-all duration-500" id="dashWeeklyBar" style="width:0%;background:#22c55e"></div></div>
+      <div class="text-xs text-slate-400 mt-1.5" id="dashWeeklyLabel">-</div>
+    </div>
+    <div class="bg-white rounded-xl border border-slate-200 p-6 shadow-sm">
+      <div class="text-sm text-slate-500 mb-2">Monthly Token</div>
+      <div class="text-2xl font-bold text-slate-900" id="dashMonthlyToken">-</div>
+      <div class="mt-3 bg-slate-100 rounded h-3 overflow-hidden"><div class="h-full rounded transition-all duration-500" id="dashMonthlyBar" style="width:0%;background:#22c55e"></div></div>
+      <div class="text-xs text-slate-400 mt-1.5" id="dashMonthlyLabel">-</div>
+    </div>
+    <div class="bg-white rounded-xl border border-slate-200 p-6 shadow-sm">
+      <div class="text-sm text-slate-500 mb-2">Proxy Status</div>
+      <div class="text-2xl font-bold text-slate-900" id="dashProxyRunning">-</div>
+      <div class="text-sm text-slate-400 mt-1.5" id="dashProxyStrategy">-</div>
+      <div class="text-sm text-slate-400" id="dashProxyPort">-</div>
+    </div>
+  </div>
+  <!-- Row 2: Token history chart + Account status -->
+  <div class="grid grid-cols-2 gap-5 mb-5">
+    <div class="bg-white rounded-xl border border-slate-200 p-6 shadow-sm">
+      <div class="flex items-center justify-between mb-4">
+        <h2 class="text-base font-semibold text-slate-900">Token Usage</h2>
+        <div class="flex gap-1 bg-slate-100 rounded-lg p-0.5">
+          <button class="px-3 py-1 text-xs font-medium rounded-md transition-colors granularity-btn" data-granularity="hourly" onclick="setGranularity('hourly')">Hourly</button>
+          <button class="px-3 py-1 text-xs font-medium rounded-md transition-colors granularity-btn active-gran" data-granularity="daily" onclick="setGranularity('daily')">Daily</button>
+          <button class="px-3 py-1 text-xs font-medium rounded-md transition-colors granularity-btn" data-granularity="weekly" onclick="setGranularity('weekly')">Weekly</button>
+        </div>
+      </div>
+      <div id="dashChart" class="text-center"><span class="spinner"></span> Loading...</div>
+    </div>
+    <div class="bg-white rounded-xl border border-slate-200 p-6 shadow-sm">
+      <h2 class="text-base font-semibold text-slate-900 mb-4">Accounts</h2>
+      <div id="dashAccounts"><span class="spinner"></span> Loading...</div>
+    </div>
+  </div>
+  <!-- Row 3: 24h availability -->
+  <div class="bg-white rounded-xl border border-slate-200 p-6 shadow-sm">
+    <h2 class="text-base font-semibold text-slate-900 mb-4">24h Availability (10min/cell)</h2>
+    <div id="dashAvailability" class="text-center"><span class="spinner"></span> Loading...</div>
+  </div>
+</div>
+
+<!-- ═══ Login ═══ -->
+<div class="tab-content" id="panel-login">
+  <div class="bg-white rounded-xl border border-slate-200 p-6 shadow-sm max-w-md">
+    <h2 class="text-base font-semibold text-slate-900 mb-4">Email OTP Login</h2>
+    <div class="mb-3"><label class="block text-xs text-slate-500 mb-1">Email</label><input type="email" id="loginEmail" placeholder="user@example.com" class="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 outline-none"></div>
+    <div id="otpSection" style="display:none">
+      <div class="mb-3"><label class="block text-xs text-slate-500 mb-1">OTP Code</label><input type="text" id="loginOtp" placeholder="6-digit code" maxlength="6" class="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm focus:ring-2 focus:ring-indigo-500 outline-none"></div>
+      <div class="flex gap-2 mb-3"><button class="px-4 py-2 bg-indigo-600 text-white rounded-lg text-sm font-medium hover:bg-indigo-700" onclick="verifyOtp()">Verify & Login</button></div>
+    </div>
+    <div class="flex gap-2">
+      <button class="px-4 py-2 bg-indigo-600 text-white rounded-lg text-sm font-medium hover:bg-indigo-700 disabled:opacity-50" id="btnSendOtp" onclick="sendOtp()">Send OTP</button>
+      <button class="px-4 py-2 bg-red-600 text-white rounded-lg text-sm font-medium hover:bg-red-700" onclick="logout()">Logout Active</button>
+    </div>
+    <div id="loginResult" class="mt-3"></div>
+  </div>
+</div>
+
+<!-- ═══ Accounts ═══ -->
+<div class="tab-content" id="panel-accounts">
+  <div class="bg-white rounded-xl border border-slate-200 p-6 shadow-sm">
+    <div class="flex items-center justify-between mb-4">
+      <div>
+        <h2 class="text-base font-semibold text-slate-900">Multi-Account Management</h2>
+        <p class="text-sm text-slate-500">Manage stagewise accounts. Usage data fetched from API.</p>
+      </div>
+      <div class="flex items-center gap-2 text-xs text-slate-500">
+        <span>Columns</span>
+        <select id="acctCols" class="rounded border border-slate-300 px-2 py-1 text-xs focus:ring-2 focus:ring-indigo-500 outline-none" onchange="renderAccounts(this.value)">
+          <option value="1">1</option>
+          <option value="2" selected>2</option>
+          <option value="3">3</option>
+          <option value="4">4</option>
+        </select>
+      </div>
+    </div>
+    <div id="accountsList"><span class="spinner"></span> Loading...</div>
+  </div>
+</div>
+
+<!-- ═══ Chat ═══ -->
+<div class="tab-content" id="panel-chat">
+  <div class="bg-white rounded-xl border border-slate-200 p-6 shadow-sm">
+    <h2 class="text-base font-semibold text-slate-900 mb-1">LLM Chat</h2>
+    <p class="text-xs text-slate-500 mb-3">System prompt from <code class="text-indigo-600">C:\Desktop\system_prompt.txt</code></p>
+    <div id="chatMessages" class="max-h-96 overflow-y-auto bg-slate-50 rounded-lg p-3 mb-3 border border-slate-200">
+      <div class="chat-msg system">Type a message to start chatting.</div>
+    </div>
+    <div class="mb-3">
+      <label class="block text-xs text-slate-500 mb-1">Model</label>
+      <select id="chatModel" class="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm focus:ring-2 focus:ring-indigo-500 outline-none">
+        <option>deepseek/deepseek-v4-flash</option>
+        <option>anthropic/claude-fable-5</option>
+        <option>anthropic/claude-opus-4.8</option>
+        <option>anthropic/claude-opus-4.7</option>
+        <option>anthropic/claude-opus-4.6</option>
+        <option>anthropic/claude-sonnet-4.6</option>
+        <option>anthropic/claude-haiku-4.5</option>
+        <option>openai/gpt-5.5</option>
+        <option>openai/gpt-5.4</option>
+        <option>openai/gpt-5.3-codex</option>
+        <option>openai/gpt-5.3-chat</option>
+        <option>openai/gpt-5.4-mini</option>
+        <option>openai/gpt-5.4-nano</option>
+        <option>google/gemini-3.1-pro-preview</option>
+        <option>google/gemini-3.5-flash</option>
+        <option>google/gemini-3-flash-preview</option>
+        <option>google/gemini-3.1-flash-lite</option>
+        <option>moonshotai/kimi-k2.7-code</option>
+        <option>moonshotai/kimi-k2.6</option>
+        <option>moonshotai/kimi-k2.5</option>
+        <option>alibaba/qwen3-32b</option>
+        <option>alibaba/qwen3-coder-30b-a3b-instruct</option>
+        <option>deepseek/deepseek-v4-pro</option>
+        <option>z-ai/glm-5.2</option>
+        <option>z-ai/glm-5.1</option>
+        <option>z-ai/glm-5v-turbo</option>
+        <option>minimax/minimax-m3</option>
+        <option>minimax/minimax-m2.7</option>
+        <option>minimax/MiniMax-M2</option>
+        <option>xiaomi-mimo/mimo-v2.5-pro</option>
+        <option>xiaomi-mimo/mimo-v2.5</option>
+      </select>
+    </div>
+    <div class="mb-3"><label class="block text-xs text-slate-500 mb-1">Message</label><textarea id="chatInput" placeholder="Type your message..." rows="3" class="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm focus:ring-2 focus:ring-indigo-500 outline-none resize-y" onkeydown="if(event.key==='Enter'&&!event.shiftKey){event.preventDefault();sendChat()}"></textarea></div>
+    <div class="flex items-center gap-3 mb-2">
+      <label class="flex items-center gap-1.5 text-xs text-slate-500 cursor-pointer"><input type="checkbox" id="chatStream" checked class="rounded border-slate-300 text-indigo-600 focus:ring-indigo-500"> Stream</label>
+      <label class="flex items-center gap-1.5 text-xs text-slate-500 cursor-pointer"><input type="checkbox" id="chatShowJson" class="rounded border-slate-300 text-indigo-600 focus:ring-indigo-500"> Show JSON</label>
+    </div>
+    <div class="flex gap-2">
+      <button class="px-4 py-2 bg-indigo-600 text-white rounded-lg text-sm font-medium hover:bg-indigo-700 disabled:opacity-50" id="btnChatSend" onclick="sendChat()">Send</button>
+      <button class="px-4 py-2 bg-slate-200 text-slate-700 rounded-lg text-sm font-medium hover:bg-slate-300" onclick="clearChat()">Clear</button>
+    </div>
+  </div>
+</div>
+
+<!-- ═══ API Explorer ═══ -->
+<div class="tab-content" id="panel-api">
+  <div class="bg-white rounded-xl border border-slate-200 p-6 shadow-sm">
+    <h2 class="text-base font-semibold text-slate-900 mb-4">API Request</h2>
+    <div class="grid grid-cols-2 gap-3 mb-3">
+      <div><label class="block text-xs text-slate-500 mb-1">Method</label><select id="apiMethod" class="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm focus:ring-2 focus:ring-indigo-500 outline-none"><option>GET</option><option>POST</option><option>PUT</option><option>DELETE</option></select></div>
+      <div><label class="block text-xs text-slate-500 mb-1">Path</label><input type="text" id="apiPath" placeholder="/v1/auth/get-session" class="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm focus:ring-2 focus:ring-indigo-500 outline-none"></div>
+    </div>
+    <div class="mb-3"><label class="block text-xs text-slate-500 mb-1">Body (JSON)</label><textarea id="apiBody" placeholder='{"key": "value"}' rows="3" class="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm focus:ring-2 focus:ring-indigo-500 outline-none resize-y font-mono"></textarea></div>
+    <div class="flex gap-2 flex-wrap mb-2">
+      <button class="px-4 py-2 bg-indigo-600 text-white rounded-lg text-sm font-medium hover:bg-indigo-700" onclick="testEndpoint()">Send</button>
+      <button class="px-4 py-2 bg-slate-200 text-slate-700 rounded-lg text-sm font-medium hover:bg-slate-300" onclick="llmTest()">LLM Test</button>
+      <button class="px-3 py-2 bg-slate-100 text-slate-600 rounded-lg text-sm hover:bg-slate-200 border border-slate-200" onclick="quickApi('/v1/auth/get-session')">Get Session</button>
+      <button class="px-3 py-2 bg-slate-100 text-slate-600 rounded-lg text-sm hover:bg-slate-200 border border-slate-200" onclick="quickApi('/v1/usage/current')">Usage</button>
+      <button class="px-3 py-2 bg-slate-100 text-slate-600 rounded-lg text-sm hover:bg-slate-200 border border-slate-200" onclick="quickApi('/v1/billing/plan')">Plan</button>
+      <button class="px-3 py-2 bg-slate-100 text-slate-600 rounded-lg text-sm hover:bg-slate-200 border border-slate-200" onclick="quickApi('/v1/usage/history?days=7')">History 7d</button>
+    </div>
+    <div id="apiResult" class="mt-3"></div>
+  </div>
+</div>
+
+<!-- ═══ Proxy ═══ -->
+<div class="tab-content" id="panel-proxy">
+  <div class="bg-white rounded-xl border border-slate-200 p-6 shadow-sm mb-4">
+    <h2 class="text-base font-semibold text-slate-900 mb-4">Reverse Proxy Control</h2>
+    <div class="grid grid-cols-2 gap-4 mb-4">
+      <div class="bg-slate-50 rounded-lg p-3 text-center"><div class="text-xs text-slate-500 mb-1">Status</div><div class="text-lg font-bold text-slate-900" id="proxyStatus">-</div></div>
+      <div class="bg-slate-50 rounded-lg p-3 text-center"><div class="text-xs text-slate-500 mb-1">Port</div><div class="text-lg font-bold text-slate-900" id="proxyPort">11434</div></div>
+    </div>
+    <div class="mb-3"><label class="block text-xs text-slate-500 mb-1">Port</label><input type="number" id="proxyPortInput" value="11434" min="1024" max="65535" class="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm focus:ring-2 focus:ring-indigo-500 outline-none"></div>
+    <div class="mb-3">
+      <label class="block text-xs text-slate-500 mb-1">Account Strategy</label>
+      <div class="flex gap-2">
+        <select id="proxyStrategy" class="flex-1 rounded-lg border border-slate-300 px-3 py-2 text-sm focus:ring-2 focus:ring-indigo-500 outline-none">
+          <option value="specific">指定单独账号 (Specific)</option>
+          <option value="fill_first">填充 (Fill First)</option>
+          <option value="round_robin">轮询 (Round Robin)</option>
+        </select>
+        <button class="px-4 py-2 bg-indigo-600 text-white rounded-lg text-sm font-medium hover:bg-indigo-700 disabled:opacity-50" onclick="setStrategy()">Apply</button>
+      </div>
+    </div>
+    <div class="flex gap-2 mb-3">
+      <button class="px-4 py-2 bg-emerald-600 text-white rounded-lg text-sm font-medium hover:bg-emerald-700 disabled:opacity-50" id="btnProxyStart" onclick="startProxy()">Start Proxy</button>
+      <button class="px-4 py-2 bg-red-600 text-white rounded-lg text-sm font-medium hover:bg-red-700 disabled:opacity-50" id="btnProxyStop" onclick="stopProxy()" disabled>Stop Proxy</button>
+      <button class="px-4 py-2 bg-slate-200 text-slate-700 rounded-lg text-sm font-medium hover:bg-slate-300" onclick="refreshProxyStatus()">Refresh</button>
+    </div>
+    <div id="proxyResult"></div>
+  </div>
+  <div class="bg-white rounded-xl border border-slate-200 p-6 shadow-sm">
+    <h2 class="text-sm font-semibold text-slate-900 mb-2">Usage</h2>
+    <p class="text-sm text-slate-500 mb-2">OpenAI-compatible server. Set base URL in your LLM client:</p>
+    <pre class="bg-slate-50 rounded-lg p-3 text-sm text-slate-700 border border-slate-200 overflow-x-auto">Base URL:   http://localhost:11434/v1
+Chat:       POST /v1/chat/completions
+Models:     GET  /v1/models
+Streaming:  Supported (SSE)</pre>
+  </div>
+</div>
+
+<!-- ═══ API Keys ═══ -->
+<div class="tab-content" id="panel-apikeys">
+  <div class="bg-white rounded-xl border border-slate-200 p-6 shadow-sm">
+    <h2 class="text-base font-semibold text-slate-900 mb-2">API Keys</h2>
+    <p class="text-sm text-slate-500 mb-4">Manage API keys for proxy access. Usage resets monthly.</p>
+    <div class="mb-3"><label class="block text-xs text-slate-500 mb-1">New Key Name</label><div class="flex gap-2"><input type="text" id="apikeyName" placeholder="e.g. dev-server" class="flex-1 rounded-lg border border-slate-300 px-3 py-2 text-sm focus:ring-2 focus:ring-indigo-500 outline-none"><button class="px-4 py-2 bg-emerald-600 text-white rounded-lg text-sm font-medium hover:bg-emerald-700" onclick="createApiKey()">Create</button></div></div>
+    <div class="grid grid-cols-2 gap-3 mb-4">
+      <div><label class="block text-xs text-slate-500 mb-1">Monthly Token Limit</label><input type="number" id="apikeyTokenLimit" value="100000000" min="1000" step="1000000" class="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm focus:ring-2 focus:ring-indigo-500 outline-none"></div>
+      <div><label class="block text-xs text-slate-500 mb-1">Monthly Request Limit</label><input type="number" id="apikeyReqLimit" value="1000000" min="100" step="10000" class="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm focus:ring-2 focus:ring-indigo-500 outline-none"></div>
+    </div>
+    <div id="apikeysList"><span class="spinner"></span> Loading...</div>
+  </div>
+</div>
+
+</div>
+
+<script>
+const API = '';
+let currentTab = '{{ default_tab }}';
+let chatAbortController = null;
+
+// ─── URL / Tab routing ───
+const TAB_ROUTES = {
+  'dashboard': '/dashboard', 'login': '/login', 'accounts': '/accounts',
+  'chat': '/chat', 'decrypt': '/decrypt', 'api': '/api-explorer',
+  'proxy': '/proxy', 'apikeys': '/apikeys',
+};
+
+document.querySelectorAll('.tab-btn').forEach(t => {
+  t.addEventListener('click', function(e) {
+    e.preventDefault();
+    const name = this.dataset.tab;
+    const url = TAB_ROUTES[name] || '/';
+    history.pushState({tab: name}, '', url);
+    switchTab(name);
+  });
+});
+
+window.addEventListener('popstate', function(e) {
+  const state = e.state;
+  if (state && state.tab) {
+    switchTab(state.tab);
+  } else {
+    switchTab('dashboard');
+  }
+});
+
+function switchTab(name) {
+  currentTab = name;
+  document.querySelectorAll('.tab-btn').forEach(t => {
+    t.classList.toggle('text-indigo-600', t.dataset.tab === name);
+    t.classList.toggle('border-indigo-600', t.dataset.tab === name);
+    t.classList.toggle('border-transparent', t.dataset.tab !== name);
+  });
+  document.querySelectorAll('.tab-content').forEach(p => p.classList.toggle('active', p.id === 'panel-' + name));
+  if (name === 'dashboard') refreshDashboard();
+  if (name === 'proxy') { refreshProxyStatus(); loadStrategy(); }
+  if (name === 'accounts') loadAccounts();
+  if (name === 'apikeys') loadApiKeys();
+}
+
+// ─── Toast ───
+function toast(msg, type='info') {
+  const colors = {success:'bg-emerald-600 text-white', error:'bg-red-600 text-white', info:'bg-indigo-600 text-white'};
+  const el = document.createElement('div');
+  el.className = 'toast fixed top-4 right-4 px-4 py-3 rounded-lg text-sm font-medium z-50 shadow-lg max-w-sm ' + (colors[type] || colors.info);
+  el.textContent = msg;
+  document.body.appendChild(el);
+  setTimeout(() => el.remove(), 4000);
+}
+
+// ─── Fetch helper ───
+async function api(path, opts={}) {
+  try {
+    const r = await fetch(API + path, {
+      headers: opts.body ? {'Content-Type':'application/json'} : {},
+      method: opts.method || (opts.body ? 'POST' : 'GET'),
+      body: opts.body ? JSON.stringify(opts.body) : undefined,
+    });
+    const j = await r.json();
+    if (!r.ok && !opts.silent) {
+      const err = j.error || j.message || JSON.stringify(j).slice(0,100);
+      if (opts.throwErr !== false) toast(err, 'error');
+    }
+    return j;
+  } catch(e) {
+    if (!opts.silent) toast('Network error: ' + e.message, 'error');
+    return null;
+  }
+}
+
+// ─── Dashboard ───
+let _dashGranularity = 'daily';
+
+async function setGranularity(g) {
+  _dashGranularity = g;
+  document.querySelectorAll('.granularity-btn').forEach(b => {
+    b.classList.toggle('active-gran', b.dataset.granularity === g);
+    b.classList.toggle('bg-white', b.dataset.granularity === g);
+    b.classList.toggle('shadow-sm', b.dataset.granularity === g);
+    b.classList.toggle('text-slate-900', b.dataset.granularity === g);
+    b.classList.toggle('text-slate-500', b.dataset.granularity !== g);
+  });
+  refreshDashboard();
+}
+
+async function refreshDashboard() {
+  const d = await api('/api/dashboard?granularity=' + _dashGranularity, {silent:true});
+  if (!d) { document.getElementById('globalStatus').textContent='Error'; return; }
+
+  const gs = document.getElementById('globalStatus');
+  if (d.activeAccount) gs.innerHTML = '<span class="inline-block w-2 h-2 rounded-full bg-emerald-500 mr-1.5"></span>' + escHtml(d.activeAccount);
+  else gs.innerHTML = '<span class="inline-block w-2 h-2 rounded-full bg-slate-400 mr-1.5"></span>No Account';
+
+  document.getElementById('acctBadge').textContent = (d.accounts?.total || 0) + ' accounts';
+
+  // ── Token quota cards ──
+  const periods = ['daily','weekly','monthly'];
+  const ids = ['Daily','Weekly','Monthly'];
+  periods.forEach((p, i) => {
+    const data = d.tokenUsage?.[p];
+    const el = document.getElementById('dash' + ids[i] + 'Token');
+    const bar = document.getElementById('dash' + ids[i] + 'Bar');
+    const lbl = document.getElementById('dash' + ids[i] + 'Label');
+    if (data) {
+      const pct = Math.min(data.percent || 0, 100);
+      const c = pct >= 100 ? '#ef4444' : pct > 80 ? '#ef4444' : pct > 50 ? '#eab308' : '#22c55e';
+      el.textContent = (data.used || 0).toLocaleString();
+      el.className = 'text-lg font-bold ' + (pct >= 100 ? 'text-red-600' : 'text-slate-900');
+      bar.style.width = pct + '%';
+      bar.style.background = c;
+      lbl.textContent = pct.toFixed(1) + '% (' + (data.limit || 0).toLocaleString() + ' limit)';
+    } else {
+      el.textContent = '-';
+      bar.style.width = '0%';
+      lbl.textContent = 'No data';
+    }
+  });
+
+  // ── Proxy status card ──
+  const pxy = d.proxy || {};
+  document.getElementById('dashProxyRunning').innerHTML =
+    `<span class="inline-block w-2.5 h-2.5 rounded-full ${pxy.running?'bg-emerald-500':'bg-red-500'} mr-1.5"></span>${pxy.running?'Running':'Stopped'}`;
+  document.getElementById('dashProxyRunning').className = 'text-lg font-bold ' + (pxy.running ? 'text-emerald-600' : 'text-red-600');
+  const stratLabels = {specific:'指定账号', fill_first:'填充', round_robin:'轮询'};
+  document.getElementById('dashProxyStrategy').textContent = 'Strategy: ' + (stratLabels[pxy.strategy] || pxy.strategy);
+  document.getElementById('dashProxyPort').textContent = 'Port: ' + (pxy.port || '-');
+
+  // ── Token history chart (30d curve) ──
+  renderTokenChart(d.tokenHistory);
+
+  // ── Account status card ──
+  renderAccountStatus(d.accounts);
+
+  // ── 24h availability grid ──
+  renderAvailabilityGrid(d.availability);
+}
+
+function renderTokenChart(history) {
+  const container = document.getElementById('dashChart');
+  if (!history || history.length === 0) {
+    container.innerHTML = '<div class="text-slate-400 text-sm py-8">No token history data</div>';
+    return;
+  }
+  const values = history.map(d => d.tokens || 0);
+  const labels = history.map(d => d.label || '');
+  const maxV = Math.max(...values, 1);
+  const w = 600, h = 220, pad = {top:12, right:12, bottom:28, left:8};
+  const vw = w - pad.left - pad.right;
+  const vh = h - pad.top - pad.bottom;
+
+  let paths = '';
+  const dots = values.map((v, i) => {
+    const x = pad.left + (i / Math.max(values.length - 1, 1)) * vw;
+    const y = pad.top + vh - (v / maxV) * vh;
+    return {x, y, v, label: labels[i] || ''};
+  });
+  if (dots.length > 0) {
+    const pts = dots.map(d => `${d.x.toFixed(1)},${d.y.toFixed(1)}`).join(' ');
+    paths = `<polyline fill="none" stroke="#4f46e5" stroke-width="1.5" points="${pts}"/>`;
+    paths += `<polyline fill="url(#areaGrad)" stroke="none" points="${pts} ${dots[dots.length-1].x},${pad.top+vh} ${dots[0].x},${pad.top+vh}"/>`;
+  }
+  const last = dots[dots.length - 1] || {v:0};
+  const step = Math.max(1, Math.floor(dots.length / 10));
+  container.innerHTML = `<svg viewBox="0 0 ${w} ${h}" class="w-full" style="min-height:180px">
+    <defs><linearGradient id="areaGrad" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stop-color="#4f46e5" stop-opacity="0.2"/><stop offset="100%" stop-color="#4f46e5" stop-opacity="0.01"/></linearGradient></defs>
+    ${paths}
+    ${dots.map((d, i) => {
+      if (i === 0 || i === dots.length - 1 || i % step === 0) {
+        return `<text x="${d.x}" y="${pad.top + vh + 16}" text-anchor="middle" class="text-[9px] fill-slate-400">${d.label}</text>`;
+      }
+      return '';
+    }).join('')}
+    <text x="${w - 4}" y="${pad.top - 4}" text-anchor="end" class="text-[9px] fill-slate-500">${last.v.toLocaleString()} tokens</text>
+  </svg>`;
+}
+
+function renderAccountStatus(accts) {
+  const el = document.getElementById('dashAccounts');
+  if (!accts) {
+    el.innerHTML = '<div class="text-slate-400 text-sm py-4">No account data</div>';
+    return;
+  }
+
+  const avail = accts.available || 0;
+  const cd = accts.cooldown || 0;
+  const blk = accts.blocked || 0;
+
+  if ((avail + cd + blk) === 0) {
+    el.innerHTML = '<div class="text-slate-400 text-sm py-4">No accounts</div>';
+    return;
+  }
+
+  el.innerHTML = `
+    <div class="grid grid-cols-3 gap-3 mb-4">
+      <div class="bg-emerald-50 rounded-xl p-5 text-center">
+        <div class="text-sm text-emerald-600 font-medium">Available</div>
+        <div class="text-3xl font-bold text-emerald-700 mt-1">${avail}</div>
+        <div class="text-xs text-emerald-500 mt-1">Ready to serve</div>
+      </div>
+      <div class="bg-amber-50 rounded-xl p-5 text-center">
+        <div class="text-sm text-amber-600 font-medium">Cooldown</div>
+        <div class="text-3xl font-bold text-amber-700 mt-1">${cd}</div>
+        <div class="text-xs text-amber-500 mt-1">限额用尽</div>
+      </div>
+      <div class="bg-red-50 rounded-xl p-5 text-center">
+        <div class="text-sm text-red-600 font-medium">Blocked</div>
+        <div class="text-3xl font-bold text-red-700 mt-1">${blk}</div>
+        <div class="text-xs text-red-500 mt-1">403 封禁封号</div>
+      </div>
+    </div>`;
+}
+
+function renderAvailabilityGrid(slots) {
+  const el = document.getElementById('dashAvailability');
+  if (!slots || slots.length === 0) {
+    el.innerHTML = '<div class="text-slate-400 text-sm py-4">No availability data</div>';
+    return;
+  }
+
+  // 6 rows x 24 cols = 144 cells
+  // Row = 4-hour block, Col = 10-min slot within block
+  let grid = '';
+  const rowLabels = ['00:00','04:00','08:00','12:00','16:00','20:00'];
+  const now = Date.now();
+
+  for (let r = 0; r < 6; r++) {
+    grid += '<div class="flex items-center gap-1.5">';
+    grid += `<div class="text-[11px] text-slate-400 w-12 shrink-0 text-right pr-1.5 font-medium">${rowLabels[r]}</div>`;
+    for (let c = 0; c < 24; c++) {
+      const idx = r * 24 + c;
+      if (idx >= slots.length) break;
+      const s = slots[idx];
+      let bg = '#e2e8f0';
+      let title = 'No data';
+      if (s.availability !== null && s.availability !== undefined) {
+        const pct = s.availability;
+        if (pct >= 100) bg = '#22c55e';
+        else if (pct >= 95) bg = '#86efac';
+        else if (pct >= 50) bg = '#eab308';
+        else bg = '#ef4444';
+        title = pct.toFixed(0) + '% (' + s.success + '/' + s.total + ')';
+      }
+      const st = new Date(s.slot_start_ts * 1000);
+      const et = new Date(s.slot_end_ts * 1000);
+      const timeStr = st.toTimeString().slice(0,5) + ' - ' + et.toTimeString().slice(0,5);
+      grid += `<div class="w-4 h-4 rounded-sm cursor-help shrink-0 border border-slate-100" style="background:${bg}" title="${timeStr} | ${title}"></div>`;
+    }
+    grid += '</div>';
+  }
+
+  // Color legend
+  grid += `<div class="flex items-center gap-4 mt-3 text-xs text-slate-500">
+    <span class="font-medium">Legend:</span>
+    <span class="flex items-center gap-1.5"><span class="w-4 h-4 rounded-sm border border-slate-100" style="background:#22c55e"></span>100%</span>
+    <span class="flex items-center gap-1.5"><span class="w-4 h-4 rounded-sm border border-slate-100" style="background:#86efac"></span>95-99%</span>
+    <span class="flex items-center gap-1.5"><span class="w-4 h-4 rounded-sm border border-slate-100" style="background:#eab308"></span>50-94%</span>
+    <span class="flex items-center gap-1.5"><span class="w-4 h-4 rounded-sm border border-slate-100" style="background:#ef4444"></span>0-49%</span>
+    <span class="flex items-center gap-1.5"><span class="w-4 h-4 rounded-sm border border-slate-100" style="background:#e2e8f0"></span>No request</span>
+  </div>`;
+
+  el.innerHTML = grid;
+}
+
+// ─── Login ───
+async function sendOtp() {
+  const email = document.getElementById('loginEmail').value.trim();
+  if (!email) { toast('Enter email','error'); return; }
+  document.getElementById('btnSendOtp').disabled = true;
+  const r = await api('/api/send-otp', {body:{email}});
+  document.getElementById('btnSendOtp').disabled = false;
+  if (r && r.success) {
+    toast('OTP sent to ' + email, 'success');
+    document.getElementById('otpSection').style.display = 'block';
+  }
+}
+
+async function verifyOtp() {
+  const email = document.getElementById('loginEmail').value.trim();
+  const otp = document.getElementById('loginOtp').value.trim();
+  if (!otp) { toast('Enter OTP','error'); return; }
+  const r = await api('/api/verify-otp', {body:{email,otp}});
+  if (r && r.success) {
+    toast('Login successful! Active account: ' + (r.activeAccount || email), 'success');
+    document.getElementById('loginResult').innerHTML = `<pre class="text-xs bg-slate-50 rounded-lg p-3 border border-slate-200 mt-2">Token: ${r.token}\nUser: ${JSON.stringify(r.user,null,2)}</pre>`;
+    document.getElementById('otpSection').style.display = 'none';
+    refreshDashboard();
+  }
+}
+
+async function logout() {
+  const r = await api('/api/logout', {method:'POST'});
+  if (r && r.success) toast('Logged out active account', 'info');
+  document.getElementById('otpSection').style.display = 'none';
+  document.getElementById('loginResult').innerHTML = '';
+  refreshDashboard();
+}
+
+// ─── Accounts ───
+let _accountsData = null;
+
+async function loadAccounts() {
+  const r = await api('/api/accounts', {silent:true});
+  if (!r) { document.getElementById('accountsList').innerHTML = '<span class="text-red-600 text-sm">Failed to load accounts</span>'; return; }
+  _accountsData = r.accounts || [];
+  const cols = document.getElementById('acctCols')?.value || 2;
+  renderAccounts(cols);
+}
+
+function renderAccounts(cols) {
+  const el = document.getElementById('accountsList');
+  if (!_accountsData || _accountsData.length === 0) {
+    el.innerHTML = '<div class="text-slate-500 text-sm">No accounts. Login first or use Decrypt to add one.</div>';
+    return;
+  }
+  const cardHtml = _accountsData.map(acct => {
+    const isActive = acct.active;
+    let infoHtml = '';
+    if (acct.usage) {
+      const plan = acct.usage.plan || 'free';
+      const windows = acct.usage.windows || [];
+      for (const w of ['daily','weekly','monthly']) {
+        const d = windows.find(x => x.type === w);
+        if (d) {
+          const pct = Math.min(d.usedPercent || 0, 100);
+          const c = pct > 80 ? '#ef4444' : pct > 50 ? '#eab308' : '#22c55e';
+          infoHtml += `<div class="flex items-center gap-2 ${infoHtml?'mt-1.5':''}"><span class="text-xs text-slate-500 w-10 shrink-0">${w==='daily'?'Day':w==='weekly'?'Wk':'Mon'}</span><div class="flex-1 bg-slate-100 rounded h-1.5 overflow-hidden"><div class="h-full rounded" style="width:${pct}%;background:${c}"></div></div><span class="text-xs text-slate-500 w-10 text-right shrink-0">${pct.toFixed(0)}%</span></div>`;
+        }
+      }
+      infoHtml += `<div class="text-xs text-slate-400 mt-1.5">Plan: ${plan}</div>`;
+    }
+    if (acct.expiresAt) {
+      const exp = new Date(acct.expiresAt);
+      const diff = exp - Date.now();
+      const h = Math.floor(diff / 3600000);
+      const m = Math.floor((diff % 3600000) / 60000);
+      const str = diff > 0 ? `${h}h${m}m` : 'Expired';
+      const color = diff < 3600000 ? 'text-red-500' : diff < 86400000 ? 'text-amber-500' : 'text-slate-400';
+      infoHtml += `<div class="text-xs ${color} mt-1">${str}</div>`;
+    }
+    return `<div class="rounded-xl border ${isActive?'border-indigo-300 bg-indigo-50':'border-slate-200 bg-white'} p-5 shadow-sm flex flex-col">
+      <div class="flex items-start gap-3 mb-3">
+        <div class="flex-1 min-w-0">
+          <div class="font-semibold text-slate-900 text-base truncate" title="${escHtml(acct.email)}">${escHtml(acct.email)}</div>
+          <div class="text-sm text-slate-400 truncate">${acct.tokenPreview || 'No token'}</div>
+        </div>
+      </div>
+      <div class="flex gap-2 mb-3">
+        ${isActive ? '<span class="text-sm font-semibold px-3 py-1 rounded-full bg-emerald-100 text-emerald-700">Active</span>'
+          : `<button class="px-3 py-1 text-sm font-medium bg-indigo-600 text-white rounded-lg hover:bg-indigo-700" onclick="switchAccount('${acct.email.replace(/'/g,"\\'")}')">Switch</button>`}
+        <button class="px-3 py-1 text-sm font-medium bg-red-600 text-white rounded-lg hover:bg-red-700" onclick="removeAccount('${acct.email.replace(/'/g,"\\'")}')">Delete</button>
+      </div>
+      <div class="flex-1">${infoHtml}</div>
+    </div>`;
+  }).join('');
+  el.innerHTML = `<div class="grid gap-3" style="grid-template-columns:repeat(${cols},minmax(0,1fr))">${cardHtml}</div>`;
+}
+
+async function switchAccount(email) {
+  const r = await api('/api/accounts/switch', {body:{email}});
+  if (r && r.success) { toast('Switched to ' + email, 'success'); loadAccounts(); refreshDashboard(); }
+}
+
+async function removeAccount(email) {
+  if (!confirm('Remove account ' + email + '?')) return;
+  const r = await api('/api/accounts/remove', {body:{email}});
+  if (r && r.success) { toast('Removed ' + email, 'info'); loadAccounts(); refreshDashboard(); }
+}
+
+// ─── Chat ───
+async function sendChat() {
+  const msg = document.getElementById('chatInput').value.trim();
+  if (!msg) { toast('Enter a message','error'); return; }
+  const model = document.getElementById('chatModel').value;
+  const stream = document.getElementById('chatStream').checked;
+  const showJson = document.getElementById('chatShowJson').checked;
+  const container = document.getElementById('chatMessages');
+  container.querySelector('.chat-msg.system')?.remove();
+  container.innerHTML += `<div class="chat-msg user">${escHtml(msg)}</div>`;
+  const respId = 'chatResp_' + Date.now();
+  container.innerHTML += `<div class="chat-msg assistant" id="${respId}"><span class="spinner"></span> Thinking...</div>`;
+  container.scrollTop = container.scrollHeight;
+  document.getElementById('chatInput').value = '';
+  chatAbortController = new AbortController();
+
+  try {
+    const res = await fetch('/api/chat', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({message: msg, model, stream}),
+      signal: chatAbortController.signal,
+    });
+
+    if (!res.ok) {
+      const err = await res.json().catch(()=>({}));
+      document.getElementById(respId).innerHTML = `<span class="text-red-600">Error: ${err.error || res.status}</span>`;
+      return;
+    }
+
+    let responseText = '';
+    let rawJson = '';
+
+    if (stream) {
+      const reader = res.body.getReader();
+      const decoder = new TextDecoder();
+      let buffer = '';
+      while (true) {
+        const {done, value} = await reader.read();
+        if (done) break;
+        buffer += decoder.decode(value, {stream: true});
+        const lines = buffer.split('\n');
+        buffer = lines.pop() || '';
+        for (const line of lines) {
+          if (line.startsWith('data: ')) {
+            const dataStr = line.slice(6).trim();
+            rawJson += line + '\n';
+            if (dataStr === '[DONE]') continue;
+            try {
+              const data = JSON.parse(dataStr);
+              const content = data.choices?.[0]?.delta?.content || data.choices?.[0]?.text || '';
+              if (content) {
+                responseText += content;
+                document.getElementById(respId).innerHTML = escHtml(responseText).replace(/\n/g, '<br>');
+                container.scrollTop = container.scrollHeight;
+              }
+            } catch(e) {}
+          }
+        }
+      }
+    } else {
+      const data = await res.json();
+      rawJson = JSON.stringify(data, null, 2);
+      responseText = data?.choices?.[0]?.message?.content || '';
+      document.getElementById(respId).innerHTML = escHtml(responseText).replace(/\n/g, '<br>');
+    }
+
+    if (showJson && rawJson) {
+      document.getElementById(respId).innerHTML +=
+        `<div class="mt-2 pt-2 border-t border-slate-200"><button class="text-xs text-indigo-600 hover:text-indigo-800 font-medium" onclick="this.nextElementSibling.style.display=this.nextElementSibling.style.display==='none'?'block':'none'">Toggle Raw JSON</button><pre class="hidden text-xs bg-slate-50 rounded p-2 mt-1 overflow-auto max-h-48 border border-slate-200" style="display:none">${escHtml(rawJson)}</pre></div>`;
+    }
+  } catch(e) {
+    if (e.name !== 'AbortError') document.getElementById(respId).innerHTML = `<span class="text-red-600">Error: ${e.message}</span>`;
+  }
+  chatAbortController = null;
+}
+
+function clearChat() {
+  if (chatAbortController) { chatAbortController.abort(); chatAbortController = null; }
+  document.getElementById('chatMessages').innerHTML = '<div class="chat-msg system">Type a message to start chatting.</div>';
+}
+
+function escHtml(s) { const d = document.createElement('div'); d.textContent = s; return d.innerHTML; }
+
+// ─── API Explorer ───
+async function testEndpoint() {
+  const method = document.getElementById('apiMethod').value;
+  const path = document.getElementById('apiPath').value.trim();
+  let body = null;
+  const raw = document.getElementById('apiBody').value.trim();
+  if (raw) { try { body = JSON.parse(raw); } catch(e) { toast('Invalid JSON','error'); return; } }
+  document.getElementById('apiResult').innerHTML = '<span class="spinner"></span> Requesting...';
+  const r = await api('/api/test-endpoint', {body:{method,path,body}, throwErr:false});
+  if (r) {
+    const sc = r.status < 300 ? 'text-emerald-600' : r.status < 400 ? 'text-amber-600' : 'text-red-600';
+    document.getElementById('apiResult').innerHTML = `<div class="mb-1"><span class="font-bold ${sc}">${r.status}</span></div><pre class="text-xs bg-slate-50 rounded-lg p-3 border border-slate-200 max-h-64 overflow-auto">${r.json ? JSON.stringify(r.json,null,2) : r.body}</pre>`;
+  }
+}
+
+function quickApi(path) {
+  document.getElementById('apiMethod').value = 'GET';
+  document.getElementById('apiPath').value = path;
+  document.getElementById('apiBody').value = '';
+  testEndpoint();
+}
+
+async function llmTest() {
+  document.getElementById('apiResult').innerHTML = '<span class="spinner"></span> Testing LLM...';
+  const r = await api('/api/llm-test', {method:'POST', throwErr:false});
+  if (r) {
+    const sc = r.status === 200 ? 'text-emerald-600' : 'text-red-600';
+    document.getElementById('apiResult').innerHTML = `<div class="mb-1"><span class="font-bold ${sc}">${r.status}</span> ${r.status===200?'':'(Free plan = 401 expected)'}</div><pre class="text-xs bg-slate-50 rounded-lg p-3 border border-slate-200 max-h-64 overflow-auto">${r.json ? JSON.stringify(r.json,null,2) : r.body}</pre>`;
+  }
+}
+
+// ─── Proxy ───
+async function startProxy() {
+  const port = parseInt(document.getElementById('proxyPortInput').value) || 11434;
+  const r = await api('/api/proxy/start', {body:{port}});
+  if (r && r.success) { toast('Proxy started on :' + port, 'success'); refreshProxyStatus(); }
+}
+
+async function stopProxy() {
+  const r = await api('/api/proxy/stop', {method:'POST'});
+  if (r && r.success) { toast('Proxy stopped', 'info'); refreshProxyStatus(); }
+}
+
+async function refreshProxyStatus() {
+  const r = await api('/api/proxy/status', {silent:true});
+  if (!r) return;
+  const sv = document.getElementById('proxyStatus');
+  sv.innerHTML = `<span class="inline-block w-2.5 h-2.5 rounded-full ${r.running?'bg-emerald-500':'bg-red-500'} mr-1.5"></span>${r.running?'Running':'Stopped'}`;
+  sv.className = 'text-lg font-bold ' + (r.running ? 'text-emerald-600' : 'text-red-600');
+  document.getElementById('proxyPort').textContent = r.port || '-';
+  document.getElementById('btnProxyStart').disabled = r.running;
+  document.getElementById('btnProxyStop').disabled = !r.running;
+  document.getElementById('proxyPortInput').value = r.port || 11434;
+  document.getElementById('proxyStrategy').value = r.strategy || 'specific';
+}
+
+async function loadStrategy() {
+  const r = await api('/api/strategy', {silent:true});
+  if (r) {
+    document.getElementById('proxyStrategy').value = r.strategy || 'specific';
+  }
+}
+
+async function setStrategy() {
+  const strategy = document.getElementById('proxyStrategy').value;
+  const r = await api('/api/strategy', {method:'POST', body:{strategy}});
+  if (r && r.success) {
+    toast('Strategy changed to: ' + strategy, 'success');
+    refreshProxyStatus();
+    refreshDashboard();
+  }
+}
+
+// ─── API Keys ───
+async function loadApiKeys() {
+  const r = await api('/api/keys', {silent:true});
+  const el = document.getElementById('apikeysList');
+  if (!r || !r.keys) { el.innerHTML = '<span class="text-red-600 text-sm">Failed to load</span>'; return; }
+  if (r.keys.length === 0) { el.innerHTML = '<div class="text-slate-500 text-sm">No API keys. Create one above.</div>'; return; }
+  let html = '';
+  for (const k of r.keys) {
+    const isEnabled = k.enabled;
+    const tBar = Math.min(k.token_usage_pct, 100);
+    const rBar = Math.min(k.request_usage_pct, 100);
+    const tCol = tBar > 80 ? '#ef4444' : tBar > 50 ? '#eab308' : '#22c55e';
+    const rCol = rBar > 80 ? '#ef4444' : rBar > 50 ? '#eab308' : '#22c55e';
+    html += `<div class="rounded-xl border border-slate-200 bg-white p-4 mb-3 shadow-sm">
+      <div class="flex items-center gap-2 mb-3">
+        <span class="font-semibold text-slate-900 flex-1">${escHtml(k.name)}</span>
+        <span class="text-xs font-medium px-2 py-0.5 rounded-full ${isEnabled?'bg-emerald-100 text-emerald-700':'bg-red-100 text-red-700'}">${isEnabled?'Active':'Disabled'}</span>
+        <button class="px-2.5 py-1 text-xs font-medium bg-slate-200 text-slate-700 rounded-lg hover:bg-slate-300" onclick="toggleApiKey('${k.key}')">${isEnabled?'Disable':'Enable'}</button>
+        <button class="px-2.5 py-1 text-xs font-medium bg-red-600 text-white rounded-lg hover:bg-red-700" onclick="deleteApiKey('${k.key}')">Delete</button>
+      </div>
+      <div class="text-xs text-slate-500 font-mono mb-3">${k.keyPreview}</div>
+      <div class="text-xs text-slate-500 mb-1">Tokens: ${k.month_tokens.toLocaleString()} / ${k.monthly_token_limit.toLocaleString()} (${k.token_usage_pct}%)</div>
+      <div class="bg-slate-100 rounded h-1.5 mb-2 overflow-hidden"><div class="h-full rounded" style="width:${tBar}%;background:${tCol}"></div></div>
+      <div class="text-xs text-slate-500 mb-1">Requests: ${k.month_requests.toLocaleString()} / ${k.monthly_request_limit.toLocaleString()} (${k.request_usage_pct}%)</div>
+      <div class="bg-slate-100 rounded h-1.5 mb-2 overflow-hidden"><div class="h-full rounded" style="width:${rBar}%;background:${rCol}"></div></div>
+      <div class="text-xs text-slate-400">Total: ${k.total_tokens.toLocaleString()} tokens, ${k.total_requests.toLocaleString()} requests</div>
+    </div>`;
+  }
+  el.innerHTML = html;
+}
+
+async function createApiKey() {
+  const name = document.getElementById('apikeyName').value.trim();
+  if (!name) { toast('Enter a key name','error'); return; }
+  const monthly_tokens = parseInt(document.getElementById('apikeyTokenLimit').value) || undefined;
+  const monthly_requests = parseInt(document.getElementById('apikeyReqLimit').value) || undefined;
+  const r = await api('/api/keys/create', {body:{name, monthly_tokens, monthly_requests}});
+  if (r && r.success) {
+    toast('Created: ' + r.key, 'success');
+    document.getElementById('apikeyName').value = '';
+    loadApiKeys();
+  }
+}
+
+async function deleteApiKey(key) {
+  if (!confirm('Delete this API key? This cannot be undone.')) return;
+  const r = await api('/api/keys/delete', {body:{key}});
+  if (r && r.success) { toast('Deleted','info'); loadApiKeys(); }
+}
+
+async function toggleApiKey(key) {
+  const r = await api('/api/keys/toggle', {body:{key}});
+  if (r && r.success) { loadApiKeys(); }
+}
+
+// ─── Auto-refresh ───
+setInterval(() => {
+  if (currentTab === 'dashboard') refreshDashboard();
+  if (currentTab === 'accounts') loadAccounts();
+  if (currentTab === 'apikeys') loadApiKeys();
+}, 60000);
+
+// ─── Init ───
+// Set granularity default styles
+const dailyBtn = document.querySelector('.granularity-btn[data-granularity="daily"]');
+if (dailyBtn) {
+  dailyBtn.classList.add('active-gran', 'bg-white', 'shadow-sm', 'text-slate-900');
+}
+switchTab(currentTab);
+</script>
+</body>
+</html>
