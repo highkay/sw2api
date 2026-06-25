@@ -54,57 +54,25 @@ tailwind.config = {
 
 <!-- ═══ Dashboard ═══ -->
 <div class="tab-content active" id="panel-dashboard">
-  <!-- Row 1: Token quota cards + proxy status -->
-  <div class="grid grid-cols-4 gap-5 mb-5">
-    <div class="bg-white rounded-xl border border-slate-200 p-6 shadow-sm">
-      <div class="text-sm text-slate-500 mb-2">Daily Token</div>
-      <div class="text-2xl font-bold text-slate-900" id="dashDailyToken">-</div>
-      <div class="mt-3 bg-slate-100 rounded h-3 overflow-hidden"><div class="h-full rounded transition-all duration-500" id="dashDailyBar" style="width:0%;background:#22c55e"></div></div>
-      <div class="text-xs text-slate-400 mt-1.5" id="dashDailyLabel">-</div>
-    </div>
-    <div class="bg-white rounded-xl border border-slate-200 p-6 shadow-sm">
-      <div class="text-sm text-slate-500 mb-2">Weekly Token</div>
-      <div class="text-2xl font-bold text-slate-900" id="dashWeeklyToken">-</div>
-      <div class="mt-3 bg-slate-100 rounded h-3 overflow-hidden"><div class="h-full rounded transition-all duration-500" id="dashWeeklyBar" style="width:0%;background:#22c55e"></div></div>
-      <div class="text-xs text-slate-400 mt-1.5" id="dashWeeklyLabel">-</div>
-    </div>
-    <div class="bg-white rounded-xl border border-slate-200 p-6 shadow-sm">
-      <div class="text-sm text-slate-500 mb-2">Monthly Token</div>
-      <div class="text-2xl font-bold text-slate-900" id="dashMonthlyToken">-</div>
-      <div class="mt-3 bg-slate-100 rounded h-3 overflow-hidden"><div class="h-full rounded transition-all duration-500" id="dashMonthlyBar" style="width:0%;background:#22c55e"></div></div>
-      <div class="text-xs text-slate-400 mt-1.5" id="dashMonthlyLabel">-</div>
-    </div>
-    <div class="bg-white rounded-xl border border-slate-200 p-6 shadow-sm">
-      <div class="text-sm text-slate-500 mb-2">Proxy Status</div>
-      <div class="text-2xl font-bold text-slate-900" id="dashProxyRunning">-</div>
-      <div class="text-sm text-slate-400 mt-1.5" id="dashProxyStrategy">-</div>
-      <div class="text-sm text-slate-400" id="dashProxyPort">-</div>
-    </div>
-  </div>
-  <!-- Row 2: Token history chart + Account status -->
+  <!-- Row 1: Accounts + Proxy Status -->
   <div class="grid grid-cols-2 gap-5 mb-5">
-    <div class="bg-white rounded-xl border border-slate-200 p-6 shadow-sm">
+    <div class="bg-white rounded-xl border border-slate-200 p-6 shadow-sm col-span-2">
       <div class="flex items-center justify-between mb-4">
-        <h2 class="text-base font-semibold text-slate-900">Token Usage</h2>
-        <div class="flex gap-1 bg-slate-100 rounded-lg p-0.5">
-          <button class="px-3 py-1 text-xs font-medium rounded-md transition-colors granularity-btn" data-granularity="hourly" onclick="setGranularity('hourly')">Hourly</button>
-          <button class="px-3 py-1 text-xs font-medium rounded-md transition-colors granularity-btn active-gran" data-granularity="daily" onclick="setGranularity('daily')">Daily</button>
-          <button class="px-3 py-1 text-xs font-medium rounded-md transition-colors granularity-btn" data-granularity="weekly" onclick="setGranularity('weekly')">Weekly</button>
+        <h2 class="text-base font-semibold text-slate-900">Accounts</h2>
+        <div class="flex items-center gap-2">
+          <span class="text-xs text-slate-400" id="dashProxyInfo">Proxy: --</span>
+          <button class="px-3 py-1.5 text-xs font-medium bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 disabled:opacity-50" id="btnRefreshAccts" onclick="refreshAccounts()">Refresh</button>
         </div>
       </div>
-      <div id="dashChart" class="text-center"><span class="spinner"></span> Loading...</div>
-    </div>
-    <div class="bg-white rounded-xl border border-slate-200 p-6 shadow-sm">
-      <h2 class="text-base font-semibold text-slate-900 mb-4">Accounts</h2>
       <div id="dashAccounts"><span class="spinner"></span> Loading...</div>
     </div>
   </div>
-  <!-- Row 3: 24h availability -->
-  <div class="bg-white rounded-xl border border-slate-200 p-6 shadow-sm">
+  <!-- Row 2: 24h availability -->
+  <div class="bg-white rounded-xl border border-slate-200 p-6 shadow-sm mb-5">
     <h2 class="text-base font-semibold text-slate-900 mb-4">24h Availability (10min/cell)</h2>
     <div id="dashAvailability" class="text-center"><span class="spinner"></span> Loading...</div>
   </div>
-  <!-- Row 4: Recent Calls -->
+  <!-- Row 3: Recent Calls -->
   <div class="bg-white rounded-xl border border-slate-200 p-6 shadow-sm">
     <div class="flex items-center justify-between mb-4">
       <h2 class="text-base font-semibold text-slate-900">Recent Calls</h2>
@@ -375,20 +343,6 @@ async function api(path, opts={}) {
 }
 
 // ─── Dashboard ───
-let _dashGranularity = 'daily';
-
-async function setGranularity(g) {
-  _dashGranularity = g;
-  document.querySelectorAll('.granularity-btn').forEach(b => {
-    b.classList.toggle('active-gran', b.dataset.granularity === g);
-    b.classList.toggle('bg-white', b.dataset.granularity === g);
-    b.classList.toggle('shadow-sm', b.dataset.granularity === g);
-    b.classList.toggle('text-slate-900', b.dataset.granularity === g);
-    b.classList.toggle('text-slate-500', b.dataset.granularity !== g);
-  });
-  refreshDashboard();
-}
-
 let _callPage = 1;
 
 async function loadCallLog(page) {
@@ -422,7 +376,7 @@ async function loadCallLog(page) {
 }
 
 async function refreshDashboard() {
-  const d = await api('/api/dashboard?granularity=' + _dashGranularity, {silent:true});
+  const d = await api('/api/dashboard', {silent:true});
   if (!d) { document.getElementById('globalStatus').textContent='Error'; return; }
 
   const gs = document.getElementById('globalStatus');
@@ -431,40 +385,10 @@ async function refreshDashboard() {
 
   document.getElementById('acctBadge').textContent = (d.accounts?.total || 0) + ' accounts';
 
-  // ── Token quota cards ──
-  const periods = ['daily','weekly','monthly'];
-  const ids = ['Daily','Weekly','Monthly'];
-  periods.forEach((p, i) => {
-    const data = d.tokenUsage?.[p];
-    const el = document.getElementById('dash' + ids[i] + 'Token');
-    const bar = document.getElementById('dash' + ids[i] + 'Bar');
-    const lbl = document.getElementById('dash' + ids[i] + 'Label');
-    if (data) {
-      const pct = Math.min(data.percent || 0, 100);
-      const c = pct >= 100 ? '#ef4444' : pct > 80 ? '#ef4444' : pct > 50 ? '#eab308' : '#22c55e';
-      el.textContent = (data.used || 0).toLocaleString();
-      el.className = 'text-lg font-bold ' + (pct >= 100 ? 'text-red-600' : 'text-slate-900');
-      bar.style.width = pct + '%';
-      bar.style.background = c;
-      lbl.textContent = pct.toFixed(1) + '% (' + (data.limit || 0).toLocaleString() + ' limit)';
-    } else {
-      el.textContent = '-';
-      bar.style.width = '0%';
-      lbl.textContent = 'No data';
-    }
-  });
-
-  // ── Proxy status card ──
+  // ── Proxy info in accounts header ──
   const pxy = d.proxy || {};
-  document.getElementById('dashProxyRunning').innerHTML =
-    `<span class="inline-block w-2.5 h-2.5 rounded-full ${pxy.running?'bg-emerald-500':'bg-red-500'} mr-1.5"></span>${pxy.running?'Running':'Stopped'}`;
-  document.getElementById('dashProxyRunning').className = 'text-lg font-bold ' + (pxy.running ? 'text-emerald-600' : 'text-red-600');
   const stratLabels = {specific:'指定账号', fill_first:'填充', round_robin:'轮询'};
-  document.getElementById('dashProxyStrategy').textContent = 'Strategy: ' + (stratLabels[pxy.strategy] || pxy.strategy);
-  document.getElementById('dashProxyPort').textContent = 'Port: ' + (pxy.port || '-');
-
-  // ── Token history chart (30d curve) ──
-  renderTokenChart(d.tokenHistory);
+  document.getElementById('dashProxyInfo').textContent = 'Proxy: ' + (pxy.running ? 'Running' : 'Stopped') + ' | ' + (stratLabels[pxy.strategy] || pxy.strategy) + ' | :' + (pxy.port || '-');
 
   // ── Account status card ──
   renderAccountStatus(d.accounts);
@@ -476,43 +400,20 @@ async function refreshDashboard() {
   loadCallLog();
 }
 
-function renderTokenChart(history) {
-  const container = document.getElementById('dashChart');
-  if (!history || history.length === 0) {
-    container.innerHTML = '<div class="text-slate-400 text-sm py-8">No token history data</div>';
-    return;
-  }
-  const values = history.map(d => d.tokens || 0);
-  const labels = history.map(d => d.label || '');
-  const maxV = Math.max(...values, 1);
-  const w = 600, h = 220, pad = {top:12, right:12, bottom:28, left:8};
-  const vw = w - pad.left - pad.right;
-  const vh = h - pad.top - pad.bottom;
-
-  let paths = '';
-  const dots = values.map((v, i) => {
-    const x = pad.left + (i / Math.max(values.length - 1, 1)) * vw;
-    const y = pad.top + vh - (v / maxV) * vh;
-    return {x, y, v, label: labels[i] || ''};
-  });
-  if (dots.length > 0) {
-    const pts = dots.map(d => `${d.x.toFixed(1)},${d.y.toFixed(1)}`).join(' ');
-    paths = `<polyline fill="none" stroke="#4f46e5" stroke-width="1.5" points="${pts}"/>`;
-    paths += `<polyline fill="url(#areaGrad)" stroke="none" points="${pts} ${dots[dots.length-1].x},${pad.top+vh} ${dots[0].x},${pad.top+vh}"/>`;
-  }
-  const last = dots[dots.length - 1] || {v:0};
-  const step = Math.max(1, Math.floor(dots.length / 10));
-  container.innerHTML = `<svg viewBox="0 0 ${w} ${h}" class="w-full" style="min-height:180px">
-    <defs><linearGradient id="areaGrad" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stop-color="#4f46e5" stop-opacity="0.2"/><stop offset="100%" stop-color="#4f46e5" stop-opacity="0.01"/></linearGradient></defs>
-    ${paths}
-    ${dots.map((d, i) => {
-      if (i === 0 || i === dots.length - 1 || i % step === 0) {
-        return `<text x="${d.x}" y="${pad.top + vh + 16}" text-anchor="middle" class="text-[9px] fill-slate-400">${d.label}</text>`;
-      }
-      return '';
-    }).join('')}
-    <text x="${w - 4}" y="${pad.top - 4}" text-anchor="end" class="text-[9px] fill-slate-500">${last.v.toLocaleString()} tokens</text>
-  </svg>`;
+async function refreshAccounts() {
+  const btn = document.getElementById('btnRefreshAccts');
+  btn.disabled = true;
+  btn.textContent = 'Refreshing...';
+  const d = await api('/api/dashboard', {silent:true});
+  if (!d) { btn.disabled = false; btn.textContent = 'Refresh'; return; }
+  const pxy = d.proxy || {};
+  const stratLabels = {specific:'指定账号', fill_first:'填充', round_robin:'轮询'};
+  document.getElementById('dashProxyInfo').textContent = 'Proxy: ' + (pxy.running ? 'Running' : 'Stopped') + ' | ' + (stratLabels[pxy.strategy] || pxy.strategy) + ' | :' + (pxy.port || '-');
+  renderAccountStatus(d.accounts);
+  renderAvailabilityGrid(d.availability);
+  loadCallLog();
+  btn.disabled = false;
+  btn.textContent = 'Refresh';
 }
 
 function renderAccountStatus(accts) {
@@ -932,19 +833,7 @@ async function toggleApiKey(keyId) {
   if (r && r.success) { loadApiKeys(); }
 }
 
-// ─── Auto-refresh ───
-setInterval(() => {
-  if (currentTab === 'dashboard') refreshDashboard();
-  if (currentTab === 'accounts') loadAccounts();
-  if (currentTab === 'apikeys') loadApiKeys();
-}, 60000);
-
 // ─── Init ───
-// Set granularity default styles
-const dailyBtn = document.querySelector('.granularity-btn[data-granularity="daily"]');
-if (dailyBtn) {
-  dailyBtn.classList.add('active-gran', 'bg-white', 'shadow-sm', 'text-slate-900');
-}
 switchTab(currentTab);
 </script>
 </body>

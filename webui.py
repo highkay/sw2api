@@ -182,66 +182,27 @@ def api_health_availability():
 def api_dashboard():
     cfg = load_config()
     active = cfg.get("activeAccount")
-    token = get_active_token(cfg)
     strategy = cfg.get("strategy", STRATEGY_SPECIFIC)
 
     accounts = list(cfg.get("accounts", {}).items())
     total_accounts = len(accounts)
     account_details = []
-    detail_lock = threading.Lock()
 
-    def fetch_account_usage(email, acct):
+    for email, acct in accounts:
         state = get_account_state(email)
         is_banned = state.banned
-        info = {"email": email, "banned": is_banned, "quota": None, "cooldown": False, "blocked": False}
-        quota_exhausted = False
-        if not is_banned:
-            acct_token = acct.get("token")
-            if acct_token:
-                usage_res = api_request("GET", "/v1/usage/current", acct_token, timeout=5)
-                if usage_res["status"] == 200 and usage_res.get("json"):
-                    windows = usage_res["json"].get("windows", [])
-                    info["quota"] = windows
-                    for w in windows:
-                        if w.get("usedPercent", 0) >= 100:
-                            quota_exhausted = True
-        with detail_lock:
-            if is_banned:
-                info["blocked"] = True
-            elif quota_exhausted or not state.is_available():
-                info["cooldown"] = True
-            account_details.append(info)
-
-    with ThreadPoolExecutor(max_workers=16) as pool:
-        pool.map(lambda x: fetch_account_usage(*x), accounts)
+        if is_banned:
+            account_details.append({"email": email, "banned": True, "blocked": True, "cooldown": False, "quota": None})
+        elif not state.is_available():
+            account_details.append({"email": email, "banned": False, "blocked": False, "cooldown": True, "quota": None})
+        else:
+            account_details.append({"email": email, "banned": False, "blocked": False, "cooldown": False, "quota": None})
 
     available_count = sum(1 for d in account_details if not d["cooldown"] and not d["blocked"])
     cooldown_count = sum(1 for d in account_details if d["cooldown"])
     blocked_count = sum(1 for d in account_details if d["blocked"])
 
-    token_usage = {}
-    if token:
-        usage_res = api_request("GET", "/v1/usage/current", token, timeout=5)
-        if usage_res["status"] == 200 and usage_res.get("json"):
-            windows = usage_res["json"].get("windows", [])
-            for w in windows:
-                token_usage[w.get("type", "")] = {
-                    "used": w.get("used", 0),
-                    "limit": w.get("limit", 0),
-                    "percent": w.get("usedPercent", 0),
-                }
-
-    granularity = request.args.get("granularity", "daily")
-    if granularity == "hourly":
-        token_history = usage_store.get_hourly(hours=24)
-    elif granularity == "weekly":
-        token_history = usage_store.get_weekly(weeks=12)
-    else:
-        token_history = usage_store.get_daily(days=30)
-
     return jsonify({
-        "tokenUsage": token_usage,
-        "tokenHistory": token_history,
         "availability": health_tracker.get_availability(),
         "availabilitySummary": health_tracker.get_summary(),
         "proxy": {
