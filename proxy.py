@@ -82,10 +82,9 @@ class AccountState:
         now = time.time()
         self.last_status = status
         if status == 403:
-            self.banned = True
-            self.banned_reason = "Account banned (403)"
+            self.backoff_level = 0
+            self.next_retry_at = now + COOLDOWN_401
             self.unavailable = True
-            self.next_retry_at = float("inf")
         elif status == 429:
             self.backoff_level += 1
             delay = min(COOLDOWN_429_BASE * (2 ** self.backoff_level), COOLDOWN_429_MAX)
