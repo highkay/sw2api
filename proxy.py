@@ -56,71 +56,21 @@ STRATEGY_FILL_FIRST = "fill_first"
 STRATEGY_ROUND_ROBIN = "round_robin"
 
 # Cooldown durations (seconds)
-COOLDOWN_429_BASE = 15
-COOLDOWN_429_MAX = 1800
-COOLDOWN_401 = 1800
-COOLDOWN_5XX = 30
+
 
 
 class AccountState:
-    """Per-account cooldown / banned state.
-
-    Cooldown (temporary, auto-recovers):  429 / 401 / 5xx
-    Banned (permanent, manual clear only): 403
-    """
-
     def __init__(self, email):
         self.email = email
-        self.unavailable = False
-        self.next_retry_at = 0.0
-        self.backoff_level = 0
-        self.last_status = 0
         self.banned = False
         self.banned_reason = ""
-
-    def apply_cooldown(self, status):
-        now = time.time()
-        self.last_status = status
-        if status == 403:
-            self.backoff_level = 0
-            self.next_retry_at = now + COOLDOWN_401
-            self.unavailable = True
-        elif status == 429:
-            self.backoff_level += 1
-            delay = min(COOLDOWN_429_BASE * (2 ** self.backoff_level), COOLDOWN_429_MAX)
-            self.next_retry_at = now + delay
-            self.unavailable = True
-        elif status == 401:
-            self.backoff_level = 0
-            self.next_retry_at = now + COOLDOWN_401
-            self.unavailable = True
-        elif 500 <= status < 600:
-            self.backoff_level = 0
-            self.next_retry_at = now + COOLDOWN_5XX
-            self.unavailable = True
-        else:
-            self.unavailable = False
-            self.next_retry_at = 0.0
-            self.backoff_level = 0
 
     def unban(self):
         self.banned = False
         self.banned_reason = ""
-        self.unavailable = False
-        self.next_retry_at = 0.0
 
     def is_available(self, now=None):
-        if self.banned:
-            return False
-        if now is None:
-            now = time.time()
-        if not self.unavailable:
-            return True
-        if now >= self.next_retry_at:
-            self.unavailable = False
-            self.backoff_level = 0
-            return True
-        return False
+        return not self.banned
 
 
 # Module-level account state (thread-safe)
@@ -552,9 +502,11 @@ class ProxyHandler(BaseHTTPRequestHandler):
                     save_config(cfg)
 
             status = resp.status
-            if status in (401, 402, 403, 429) or (500 <= status < 600):
-                state = get_account_state(email)
-                state.apply_cooldown(status)
+            if email and status in (401, 402, 403, 429) or (500 <= status < 600):
+                cfg = self.__class__.config
+                if email in cfg.get("accounts", {}):
+                    cfg["accounts"][email]["disabled"] = True
+                    save_config(cfg)
 
             self.send_response(resp.status)
             skip = {"set-auth-token", "connection", "keep-alive", "transfer-encoding"}
@@ -604,8 +556,10 @@ class ProxyHandler(BaseHTTPRequestHandler):
                     try:
                         d = json.loads(data.decode("utf-8", errors="replace"))
                         if d.get("error"):
-                            state = get_account_state(email)
-                            state.apply_cooldown(429)
+                            cfg = self.__class__.config
+                            if email in cfg.get("accounts", {}):
+                                cfg["accounts"][email]["disabled"] = True
+                                save_config(cfg)
                         model = d.get("model", model)
                         u = d.get("usage", {})
                         i_tokens = u.get("prompt_tokens", 0)
@@ -661,14 +615,13 @@ def start_refresh_timer(config):
                         print(f"[{ts}] OK Token rotated for {email}")
                         config["accounts"][email]["token"] = new_token
                         save_config(config)
-                    state = get_account_state(email)
                     if res["status"] in (401, 403):
                         print(f"[{ts}] X Session expired for {email} ({res['status']})")
                         config["accounts"][email]["token"] = None
-                        state.apply_cooldown(res["status"])
+                        config["accounts"][email]["disabled"] = True
                         save_config(config)
                     elif res["status"] == 200:
-                        state.apply_cooldown(200)
+                        pass
                 except Exception as e:
                     print(f"[{ts}] X Refresh error for {email}: {e}")
 

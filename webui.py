@@ -190,21 +190,13 @@ def api_dashboard():
     account_details = []
 
     for email, acct in accounts:
-        state = get_account_state(email)
-        is_banned = state.banned
         is_disabled = acct.get("disabled", False)
         if is_disabled:
-            account_details.append({"email": email, "banned": False, "blocked": False, "cooldown": False, "disabled": True, "quota": None})
-        elif is_banned:
-            account_details.append({"email": email, "banned": True, "blocked": True, "cooldown": False, "quota": None})
-        elif not state.is_available():
-            account_details.append({"email": email, "banned": False, "blocked": False, "cooldown": True, "quota": None})
+            account_details.append({"email": email, "disabled": True, "blocked": False, "quota": None})
         else:
-            account_details.append({"email": email, "banned": False, "blocked": False, "cooldown": False, "quota": None})
+            account_details.append({"email": email, "disabled": False, "blocked": False, "quota": None})
 
-    available_count = sum(1 for d in account_details if not d["cooldown"] and not d["blocked"] and not d.get("disabled"))
-    cooldown_count = sum(1 for d in account_details if d["cooldown"])
-    blocked_count = sum(1 for d in account_details if d["blocked"])
+    available_count = sum(1 for d in account_details if not d.get("disabled"))
     disabled_count = sum(1 for d in account_details if d.get("disabled"))
 
     return jsonify({
@@ -219,8 +211,6 @@ def api_dashboard():
             "total": total_accounts,
             "available": available_count,
             "disabled": disabled_count,
-            "cooldown": cooldown_count,
-            "blocked": blocked_count,
             "details": account_details,
         },
         "activeAccount": active,
@@ -615,7 +605,10 @@ def _start_proxy_instance(port):
                         save_config(cfg)
                 status = resp.status
                 if email and (status in (401, 402, 403, 429) or (500 <= status < 600)):
-                    get_account_state(email).apply_cooldown(status)
+                    cfg = self.__class__.config
+                    if email in cfg.get("accounts", {}):
+                        cfg["accounts"][email]["disabled"] = True
+                        save_config(cfg)
                 self.send_response(resp.status)
                 skip = {"connection", "keep-alive", "transfer-encoding", "set-auth-token"}
                 for k, v in resp.getheaders():
@@ -660,7 +653,10 @@ def _start_proxy_instance(port):
                         try:
                             d = json.loads(data.decode("utf-8", errors="replace"))
                             if d.get("error"):
-                                get_account_state(email).apply_cooldown(429)
+                                cfg = self.__class__.config
+                                if email in cfg.get("accounts", {}):
+                                    cfg["accounts"][email]["disabled"] = True
+                                    save_config(cfg)
                             model = d.get("model", model)
                             u = d.get("usage", {})
                             i_tokens = u.get("prompt_tokens", 0)
@@ -810,7 +806,39 @@ def api_accounts_disable():
     return jsonify({"success": True, "email": email, "disabled": True})
 
 
-@app.route("/api/accounts/enable", methods=["POST"])
+@app.route("/api/accounts/refresh-usage", methods=["POST"])
+def api_accounts_refresh_usage():
+    cfg = load_config()
+    accounts = cfg.get("accounts", {})
+    if not accounts:
+        return jsonify({"success": True, "enabled": 0, "total": 0})
+
+    enabled_count = 0
+    lock = threading.Lock()
+
+    def check_and_enable(email, acct):
+        nonlocal enabled_count
+        if not acct.get("disabled"):
+            return
+        token = acct.get("token")
+        if not token:
+            return
+        usage_res = api_request("GET", "/v1/usage/current", token, timeout=10)
+        if usage_res["status"] == 200 and usage_res.get("json"):
+            windows = usage_res["json"].get("windows", [])
+            all_clear = all(w.get("usedPercent", 0) < 100 for w in windows)
+            if all_clear:
+                with lock:
+                    cfg["accounts"][email]["disabled"] = False
+                    enabled_count += 1
+
+    with ThreadPoolExecutor(max_workers=16) as pool:
+        pool.map(lambda x: check_and_enable(*x), accounts.items())
+
+    if enabled_count > 0:
+        save_config(cfg)
+
+    return jsonify({"success": True, "enabled": enabled_count, "total": len(accounts)})
 def api_accounts_enable():
     cfg = load_config()
     email = request.json.get("email", "").strip()

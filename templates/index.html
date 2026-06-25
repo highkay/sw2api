@@ -430,10 +430,9 @@ function renderAccountStatus(accts) {
   }
 
   const avail = accts.available || 0;
-  const cd = accts.cooldown || 0;
-  const blk = accts.blocked || 0;
+  const dis = accts.disabled || 0;
 
-  if ((avail + cd + blk) === 0) {
+  if ((avail + dis) === 0) {
     el.innerHTML = '<div class="text-slate-400 text-sm py-4">No accounts</div>';
     return;
   }
@@ -447,12 +446,6 @@ function renderAccountStatus(accts) {
       if (a.disabled) {
         badge = '<span class="text-xs font-medium px-2 py-0.5 rounded-full bg-slate-100 text-slate-500">Disabled</span>';
         btn = `<button class="text-xs px-2 py-0.5 rounded bg-emerald-600 text-white hover:bg-emerald-700 ml-auto shrink-0" onclick="event.stopPropagation();toggleAccount('${a.email.replace(/'/g,"\\'")}','enable')">Enable</button>`;
-      } else if (a.blocked || a.banned) {
-        badge = '<span class="text-xs font-medium px-2 py-0.5 rounded-full bg-red-100 text-red-700">Blocked</span>';
-        btn = `<button class="text-xs px-2 py-0.5 rounded bg-slate-200 text-slate-600 hover:bg-slate-300 ml-auto shrink-0" onclick="event.stopPropagation();toggleAccount('${a.email.replace(/'/g,"\\'")}','disable')">Disable</button>`;
-      } else if (a.cooldown) {
-        badge = '<span class="text-xs font-medium px-2 py-0.5 rounded-full bg-amber-100 text-amber-700">Cooldown</span>';
-        btn = `<button class="text-xs px-2 py-0.5 rounded bg-slate-200 text-slate-600 hover:bg-slate-300 ml-auto shrink-0" onclick="event.stopPropagation();toggleAccount('${a.email.replace(/'/g,"\\'")}','disable')">Disable</button>`;
       } else {
         badge = '<span class="text-xs font-medium px-2 py-0.5 rounded-full bg-emerald-100 text-emerald-700">Available</span>';
         btn = `<button class="text-xs px-2 py-0.5 rounded bg-slate-200 text-slate-600 hover:bg-slate-300 ml-auto shrink-0" onclick="event.stopPropagation();toggleAccount('${a.email.replace(/'/g,"\\'")}','disable')">Disable</button>`;
@@ -467,21 +460,16 @@ function renderAccountStatus(accts) {
   }
 
   el.innerHTML = `
-    <div class="grid grid-cols-3 gap-3 mb-4">
+    <div class="grid grid-cols-2 gap-3 mb-4">
       <div class="bg-emerald-50 rounded-xl p-5 text-center">
         <div class="text-sm text-emerald-600 font-medium">Available</div>
         <div class="text-3xl font-bold text-emerald-700 mt-1">${avail}</div>
         <div class="text-xs text-emerald-500 mt-1">Ready to serve</div>
       </div>
-      <div class="bg-amber-50 rounded-xl p-5 text-center">
-        <div class="text-sm text-amber-600 font-medium">Cooldown</div>
-        <div class="text-3xl font-bold text-amber-700 mt-1">${cd}</div>
-        <div class="text-xs text-amber-500 mt-1">限额用尽</div>
-      </div>
-      <div class="bg-red-50 rounded-xl p-5 text-center">
-        <div class="text-sm text-red-600 font-medium">Blocked</div>
-        <div class="text-3xl font-bold text-red-700 mt-1">${blk}</div>
-        <div class="text-xs text-red-500 mt-1">403 封禁封号</div>
+      <div class="bg-slate-50 rounded-xl p-5 text-center">
+        <div class="text-sm text-slate-500 font-medium">Disabled</div>
+        <div class="text-3xl font-bold text-slate-600 mt-1">${dis}</div>
+        <div class="text-xs text-slate-400 mt-1">限流/手动禁用</div>
       </div>
     </div>
     <div class="max-h-60 overflow-y-auto">${detailRows}</div>`;
@@ -581,7 +569,14 @@ async function loadAccounts(silent) {
   _accountsData = r.accounts || [];
   const cols = document.getElementById('acctCols')?.value || 2;
   renderAccounts(cols);
-  if (!silent) toast('Refreshed ' + _accountsData.length + ' accounts', 'success');
+  if (!silent) {
+    const rr = await api('/api/accounts/refresh-usage', {method:'POST', silent:true});
+    if (rr) {
+      const msg = rr.enabled > 0 ? `Refreshed ${r.accounts.length} accounts, re-enabled ${rr.enabled}` : `Refreshed ${r.accounts.length} accounts`;
+      toast(msg, 'success');
+      refreshAccounts();
+    }
+  }
 }
 
 function renderAccounts(cols) {
