@@ -547,12 +547,12 @@ def _start_proxy_instance(port):
                 if api_key:
                     k = key_manager.validate_key(api_key)
                     if k is None:
-                    self.send_response(401)
-                    self.send_header("Content-Type", "application/json")
-                    self._cors()
-                    self.end_headers()
-                    self.wfile.write(json.dumps({"error": "Invalid or rate-limited API key", "type": "auth_error"}).encode())
-                    return
+                        self.send_response(401)
+                        self.send_header("Content-Type", "application/json")
+                        self._cors()
+                        self.end_headers()
+                        self.wfile.write(json.dumps({"error": "Invalid or rate-limited API key", "type": "auth_error"}).encode())
+                        return
 
             email, acct, token = self._select_account()
             if not token:

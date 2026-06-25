@@ -466,14 +466,14 @@ class ProxyHandler(BaseHTTPRequestHandler):
             if api_key:
                 k = key_manager.validate_key(api_key)
                 if k is None:
-                self.send_response(401)
-                self.send_header("Content-Type", "application/json")
-                self._cors_headers()
-                self.end_headers()
-                self.wfile.write(json.dumps({
-                    "error": {"message": "Invalid, disabled, or rate-limited API key", "type": "auth_error"}
-                }).encode("utf-8"))
-                return
+                    self.send_response(401)
+                    self.send_header("Content-Type", "application/json")
+                    self._cors_headers()
+                    self.end_headers()
+                    self.wfile.write(json.dumps({
+                        "error": {"message": "Invalid, disabled, or rate-limited API key", "type": "auth_error"}
+                    }).encode("utf-8"))
+                    return
 
         email, acct, token = self._select_request_account()
         if not token:
