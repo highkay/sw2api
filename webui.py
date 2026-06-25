@@ -374,16 +374,26 @@ def api_usage_history():
 def api_send_otp():
     email = request.json.get("email", "").strip()
     if not email or "@" not in email:
-        return jsonify({"error": "Invalid email"}), 400
+        return jsonify({"success": False, "error": "Invalid email", "code": "invalid_email"}), 400
     res = api_request(
         "POST", "/v1/auth/email-otp/send-verification-otp",
         body={"email": email, "type": "sign-in"},
     )
     if res["status"] == 200 and not (res.get("json") or {}).get("error"):
-        return jsonify({"success": True, "message": "OTP sent"})
+        return jsonify({
+            "success": True,
+            "message": "OTP sent",
+            "email": email,
+            "upstream_status": res["status"],
+        })
     err = (res.get("json") or {}).get("error", {})
     msg = err.get("message", err) if isinstance(err, dict) else str(err)
-    return jsonify({"success": False, "error": msg}), 400
+    return jsonify({
+        "success": False,
+        "error": msg,
+        "code": "upstream_error",
+        "upstream_status": res["status"],
+    }), 400
 
 
 @app.route("/api/verify-otp", methods=["POST"])
@@ -408,12 +418,20 @@ def api_verify_otp():
         save_config(cfg)
         return jsonify({
             "success": True,
-            "token": token[:20] + "...",
+            "token": token,
+            "token_preview": token[:20] + "...",
             "user": user,
+            "email": email,
             "activeAccount": email,
         })
-    err_msg = (j.get("error") or {}).get("message", "Login failed")
-    return jsonify({"success": False, "error": err_msg}), 401
+    err = (j.get("error") or {})
+    err_msg = err.get("message", "Login failed") if isinstance(err, dict) else str(err)
+    return jsonify({
+        "success": False,
+        "error": err_msg,
+        "code": "auth_failed",
+        "upstream_status": res["status"],
+    }), 401
 
 
 @app.route("/api/logout", methods=["POST"])
@@ -450,7 +468,6 @@ def api_test_endpoint():
     })
 
 
-@app.route("/api/proxy/start", methods=["POST"])
 def _start_proxy_instance(port):
     """Start the proxy HTTPServer in the current thread. Blocks until server stops."""
     from http.server import HTTPServer, BaseHTTPRequestHandler
@@ -643,6 +660,7 @@ def _start_proxy_instance(port):
         proxy_state["running"] = False
 
 
+@app.route("/api/proxy/start", methods=["POST"])
 def api_proxy_start():
     if proxy_state["running"]:
         return jsonify({"error": "Proxy already running"}), 400
