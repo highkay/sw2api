@@ -59,10 +59,7 @@ tailwind.config = {
     <div class="bg-white rounded-xl border border-slate-200 p-6 shadow-sm col-span-2">
       <div class="flex items-center justify-between mb-4">
         <h2 class="text-base font-semibold text-slate-900">Accounts</h2>
-        <div class="flex items-center gap-2">
-          <span class="text-xs text-slate-400" id="dashProxyInfo">Proxy: --</span>
-          <button class="px-3 py-1.5 text-xs font-medium bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 disabled:opacity-50" id="btnRefreshAccts" onclick="refreshAccounts()">Refresh</button>
-        </div>
+        <span class="text-xs text-slate-400" id="dashProxyInfo">Proxy: --</span>
       </div>
       <div id="dashAccounts"><span class="spinner"></span> Loading...</div>
     </div>
@@ -124,6 +121,7 @@ tailwind.config = {
         <p class="text-sm text-slate-500">Manage stagewise accounts. Usage data fetched from API.</p>
       </div>
       <div class="flex items-center gap-2 text-xs text-slate-500">
+        <button class="px-3 py-1.5 text-xs font-medium bg-indigo-600 text-white rounded-lg hover:bg-indigo-700" onclick="loadAccounts()">Refresh</button>
         <span>Columns</span>
         <select id="acctCols" class="rounded border border-slate-300 px-2 py-1 text-xs focus:ring-2 focus:ring-indigo-500 outline-none" onchange="renderAccounts(this.value)">
           <option value="1">1</option>
@@ -401,19 +399,14 @@ async function refreshDashboard() {
 }
 
 async function refreshAccounts() {
-  const btn = document.getElementById('btnRefreshAccts');
-  btn.disabled = true;
-  btn.textContent = 'Refreshing...';
   const d = await api('/api/dashboard', {silent:true});
-  if (!d) { btn.disabled = false; btn.textContent = 'Refresh'; return; }
+  if (!d) return;
   const pxy = d.proxy || {};
   const stratLabels = {specific:'指定账号', fill_first:'填充', round_robin:'轮询'};
   document.getElementById('dashProxyInfo').textContent = 'Proxy: ' + (pxy.running ? 'Running' : 'Stopped') + ' | ' + (stratLabels[pxy.strategy] || pxy.strategy) + ' | :' + (pxy.port || '-');
   renderAccountStatus(d.accounts);
   renderAvailabilityGrid(d.availability);
   loadCallLog();
-  btn.disabled = false;
-  btn.textContent = 'Refresh';
 }
 
 async function toggleAccount(email, action) {
