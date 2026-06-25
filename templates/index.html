@@ -409,7 +409,7 @@ async function loadCallLog(page) {
         <td class="py-2 pr-4 text-xs text-slate-600 max-w-[140px] truncate" title="${escHtml(c.model)}">${escHtml(model)}</td>
         <td class="py-2 pr-4 text-xs text-right text-slate-700">${c.input_tokens.toLocaleString()}</td>
         <td class="py-2 pr-4 text-xs text-right text-slate-700">${c.output_tokens.toLocaleString()}</td>
-        <td class="py-2 text-xs text-right ${statusCls} font-medium">${(c.input_tokens + c.output_tokens).toLocaleString()}</td>
+        <td class="py-2 text-xs text-right ${statusCls} font-medium">${c.status === 'fail' || c.status === 'error' ? c.status : (c.input_tokens + c.output_tokens).toLocaleString()}</td>
       </tr>`;
     }).join('');
   }

@@ -488,6 +488,7 @@ class ProxyHandler(BaseHTTPRequestHandler):
         conn = HTTPSConnection(target.hostname, target.port or 443, timeout=120)
 
         path = self.path
+        req_model = "unknown"
 
         if is_chat:
             path = path.replace("/v1/chat/completions", "/v1/ai/chat/completions")
@@ -500,8 +501,10 @@ class ProxyHandler(BaseHTTPRequestHandler):
                 "Host": target.hostname,
             }
             if body:
+                req_model = "unknown"
                 try:
                     req = json.loads(body.decode("utf-8"))
+                    req_model = req.get("model", "unknown")
                     req.setdefault("reasoning", {"enabled": True, "effort": "low"})
                     req.setdefault("provider", {"require_parameters": True})
                     req.setdefault("messages", []).insert(0, {"role": "system", "content": SYSTEM_PROMPT})
@@ -609,6 +612,7 @@ class ProxyHandler(BaseHTTPRequestHandler):
                 call_log.record(model, email, i_tokens, o_tokens)
             elif api_key:
                 key_manager.record_usage(api_key, 0, 1)
+                call_log.record(req_model if is_chat else "unknown", email, 0, 0, "fail")
 
         except Exception as e:
             health_tracker.record_request(success=False)
@@ -622,6 +626,8 @@ class ProxyHandler(BaseHTTPRequestHandler):
             self.wfile.write(json.dumps({
                 "error": {"message": f"Upstream error: {e}", "type": "proxy_error"}
             }).encode("utf-8"))
+            if api_key:
+                call_log.record(req_model if is_chat else "unknown", email, 0, 0, "error")
 
 
 def start_refresh_timer(config):
