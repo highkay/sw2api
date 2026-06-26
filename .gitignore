@@ -13,6 +13,9 @@ venv/
 data/config.json
 data/api_keys.json
 data/usage_history.json
+stagewise_tokens.txt
+*.png
+turnstile_debug.py
 
 # OS
 .DS_Store

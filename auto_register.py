@@ -1,14 +1,28 @@
-"""stagewise 全自动注册脚本
+"""stagewise 全自动注册脚本 v2
 
-自动创建临时邮箱 -> 通过 Playwright 注册 -> 自动读取 OTP -> 完成验证 -> 提取 Token
+自动完成:
+  1. 创建 Mail.tm 临时邮箱（或使用已有邮箱）
+  2. Playwright 浏览器自动填写 → Turnstile 自动通过 → 发送 OTP
+  3. appleemail API 自动读取 OTP（需要 Outlook 邮箱+refresh_token）
+  4. 填写 OTP → 登录成功 → 拦截 set-auth-token → 提取 API Token
+  5. 输出格式兼容 sw2api WebUI 批量导入
 
 用法:
+  # 使用 Mail.tm 临时邮箱（无法收 stagewise 邮件，仅示例）
+  python auto_register.py
+
+  # 使用 Outlook 邮箱 + appleemail API 自动收发
+  python auto_register.py --outlook \
+    --email user@outlook.com \
+    --refresh-token "M.C5..." \
+    --client-id "9e5f94bc-..."
+
+  # 批量处理
+  python auto_register.py --batch-file accounts.txt
+
+依赖:
   pip install playwright requests
   playwright install chromium
-
-  python auto_register.py                    # 注册 1 个
-  python auto_register.py --count 5           # 批量 5 个
-  python auto_register.py --output accts.json # 导出 JSON 供 WebUI 导入
 """
 
 import argparse
@@ -22,247 +36,207 @@ import uuid
 import requests
 
 CONSOLE_URL = "https://console.stagewise.io"
-API_HOST = "api.stagewise.io"
-MAIL_API = "https://api.mail.tm"
+APPLEEMAIL_API = "https://www.appleemail.top"
 
 
-class TempMail:
-    """Mail.tm 临时邮箱"""
+def login_with_playwright(email: str, get_otp_func, headless: bool = False) -> str:
+    """使用 Playwright 完成 stagewise 登录，返回 API token。
 
-    def __init__(self):
-        self.sess = requests.Session()
-        self.sess.headers.update({"Accept": "application/json", "Content-Type": "application/json"})
-        r = self.sess.get(f"{MAIL_API}/domains", timeout=10)
-        domains = r.json().get("hydra:member", [])
-        if not domains:
-            raise RuntimeError("无法获取 Mail.tm 域名")
-        self.domain = domains[0]["domain"]
-        local = f"sw{uuid.uuid4().hex[:8]}"
-        self.email = f"{local}@{self.domain}"
-        self.password = uuid.uuid4().hex[:16]
-        r = self.sess.post(f"{MAIL_API}/accounts", json={"address": self.email, "password": self.password})
-        if r.status_code not in (200, 201):
-            raise RuntimeError(f"创建临时邮箱失败: {r.text}")
-        r = self.sess.post(f"{MAIL_API}/token", json={"address": self.email, "password": self.password})
-        self.sess.headers.update({"Authorization": f"Bearer {r.json()['token']}"})
-        print(f"   邮箱: {self.email}")
+    Args:
+        email: stagewise 登录邮箱
+        get_otp_func: 获取 OTP 的回调函数，接收 playwright page 对象
+        headless: 是否无头模式
 
-    def wait_for_otp(self, timeout=120):
-        deadline = time.time() + timeout
-        while time.time() < deadline:
-            try:
-                r = self.sess.get(f"{MAIL_API}/messages", timeout=10)
-                for msg in r.json().get("hydra:member", []):
-                    r2 = self.sess.get(f"{MAIL_API}/messages/{msg['id']}", timeout=10)
-                    body = r2.json().get("text", "") or r2.json().get("html", "")
-                    m = re.search(r"\b(\d{6})\b", body)
-                    if m:
-                        return m.group(1)
-            except Exception:
-                pass
-            time.sleep(2)
-        raise TimeoutError("OTP 等待超时")
-
-    def cleanup(self):
-        try:
-            requests.delete(f"{MAIL_API}/accounts/{self.email}", timeout=3)
-        except Exception:
-            pass
-
-
-def register(temp_mail=None, email=None, headless=False):
-    """全自动注册一个 stagewise 账号。
-
-    返回: {"email": str, "token": str} 或抛出异常
+    Returns:
+        stagewise API token (set-auth-token)
     """
     from playwright.sync_api import sync_playwright
 
-    if email and not temp_mail:
-        # 使用已有邮箱 — 需要手动提供 OTP
-        pass
+    captured = []
 
     with sync_playwright() as pw:
         browser = pw.chromium.launch(
             headless=headless,
             args=["--disable-blink-features=AutomationControlled"],
         )
-        ctx = browser.new_context(
-            user_agent=(
-                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-                "AppleWebKit/537.36 (KHTML, like Gecko) "
-                "Chrome/125.0.0.0 Safari/537.36"
-            ),
-            viewport={"width": 1280, "height": 800},
-        )
+        ctx = browser.new_context(viewport={"width": 1280, "height": 900})
         page = ctx.new_page()
+
+        def on_response(resp):
+            h = resp.headers
+            if "set-auth-token" in h:
+                captured.append(h["set-auth-token"])
+
+        page.on("response", on_response)
         page.add_init_script("Object.defineProperty(navigator,'webdriver',{get:()=>undefined})")
 
-        try:
-            # 1. 打开页面
-            page.goto(CONSOLE_URL, wait_until="domcontentloaded", timeout=30000)
-            page.wait_for_timeout(3000)  # 等 React 和 Turnstile 加载
+        # 打开页面
+        page.goto(CONSOLE_URL, wait_until="domcontentloaded", timeout=30000)
+        page.wait_for_timeout(6000)
 
-            # 2. 填入邮箱
-            target_email = email or temp_mail.email
-            page.fill("#email", target_email)
-            page.wait_for_timeout(500)
+        # 填写邮箱
+        page.fill("#email", email)
+        page.click("button[type='submit']")
+        page.wait_for_timeout(5000)
+        print("  [✓] 验证码请求已发送")
 
-            # 3. 提交 (Turnstile 会在无头/有头模式自动通过)
-            page.click("button[type='submit']")
-            page.wait_for_timeout(2000)
-
-            # 检查是否进入验证码页
-            current_text = page.evaluate("document.body.innerText")
-            if "error" in current_text.lower() and "captcha" in current_text.lower():
-                # Turnstile 没通过 — 等待用户手动完成
-                print("   等待手动完成 Turnstile 验证...")
-                page.wait_for_timeout(15000)
-
-            print("   等待 OTP...")
-
-            # 4. 获取 OTP
-            if temp_mail:
-                otp = temp_mail.wait_for_otp(timeout=120)
-                print(f"   收到 OTP: {otp}")
-            elif email:
-                otp = input(f"   OTP 已发送到 {email}，请输入: ").strip()
-            else:
-                raise ValueError("需要 email 或 temp_mail")
-
-            # 5. 填入 OTP
-            page.wait_for_timeout(1000)
-
-            # 尝试多种 OTP 输入方式
-            inputs_before = page.locator("input[type='text']").all()
-            page.wait_for_timeout(500)
-
-            # 查找 OTP 输入框
-            otp_filled = False
-            try:
-                # 方式 1: 6 个独立输入框
-                for i, d in enumerate(otp):
-                    inp = page.locator(f"input[type='text']:not(#email)").nth(i)
-                    if inp.is_visible(timeout=1000):
-                        inp.fill(d)
-                        otp_filled = True
-            except Exception:
-                pass
-
-            if not otp_filled:
-                try:
-                    # 方式 2: 单个输入框
-                    page.fill("input[autocomplete='one-time-code']", otp)
-                    otp_filled = True
-                except Exception:
-                    pass
-
-            if not otp_filled:
-                # 方式 3: 所有 text input
-                for i, d in enumerate(otp):
-                    try:
-                        page.locator("input[type='text']").nth(i + 1).fill(d)
-                    except Exception:
-                        pass
-
-            page.wait_for_timeout(1000)
-
-            # 6. 提交验证码
-            try:
-                page.locator("button[type='submit']").click()
-            except Exception:
-                pass
-
-            # 7. 等待跳转到控制台
-            page.wait_for_timeout(5000)
-
-            # 8. 提取 token
-            token = page.evaluate("""() => {
-                // localStorage
-                for (const k of Object.keys(localStorage)) {
-                    try {
-                        const v = JSON.parse(localStorage[k]);
-                        if (v && typeof v === 'object') {
-                            if (v.accessToken) return v.accessToken;
-                            if (v.token) return v.token;
-                            if (v.sessionToken) return v.sessionToken;
-                        }
-                    } catch(e) {}
-                }
-                return null;
-            }""")
-
-            if not token:
-                for c in ctx.cookies():
-                    if any(t in c["name"].lower() for t in ("token", "session", "auth")):
-                        token = c["value"]
-                        break
-
+        # 获取 OTP
+        otp = get_otp_func(page)
+        if not otp:
+            print("  [✗] 获取 OTP 失败")
             ctx.close()
             browser.close()
+            return None
 
-            if token:
-                print(f"   Token: {token[:30]}...")
-                return {"email": target_email, "token": token}
-            else:
-                print("   ⚠️ Token 未自动提取，请手动从浏览器获取")
-                return {"email": target_email, "token": None}
+        print(f"  [✓] OTP: {otp}")
 
-        except Exception:
+        # 输入 OTP
+        page.fill("#otp", otp)
+        page.wait_for_timeout(300)
+        page.click("button[type='submit']")
+        page.wait_for_timeout(8000)
+
+        # 检查结果
+        text = page.evaluate("document.body.innerText")
+        if "error" in text.lower() and "invalid" in text.lower():
+            print(f"  [✗] OTP 验证失败: {text[:200]}")
             ctx.close()
             browser.close()
-            raise
+            return None
+
+        print("  [✓] 登录成功")
+
+        ctx.close()
+        browser.close()
+
+        if captured:
+            return captured[-1]
+        return None
+
+
+def appleemail_otp(email, refresh_token, client_id):
+    """使用 appleemail API 获取 OTP 的工厂函数"""
+
+    def get_otp(page):
+        """等待 INBOX 中出现新的 stagewise OTP 邮件"""
+        # 先获取已有邮件数作为基线
+        r = requests.post(f"{APPLEEMAIL_API}/api/mail-all", json={
+            "refresh_token": refresh_token, "client_id": client_id,
+            "email": email, "mailbox": "INBOX",
+        })
+        existing_count = len(r.json().get("data", [])) if r.status_code == 200 else 0
+
+        for i in range(30):
+            time.sleep(2)
+            r = requests.post(f"{APPLEEMAIL_API}/api/mail-all", json={
+                "refresh_token": refresh_token, "client_id": client_id,
+                "email": email, "mailbox": "INBOX",
+            })
+            if r.status_code == 200:
+                msgs = r.json().get("data", [])
+                # 只看新邮件
+                for m in msgs[existing_count:]:
+                    body = m.get("text", "") or ""
+                    codes = re.findall(r"\b(\d{6})\b", body)
+                    if codes:
+                        return codes[-1]
+            print(f"   等待 OTP 邮件... ({i+1}/30)")
+        return None
+
+    return get_otp
+
+
+def mailtm_get_otp(temp_mail, expected_count=0):
+    """使用 Mail.tm 获取 OTP（但 stagewise 可能不发到 Mail.tm）"""
+
+    def get_otp(page):
+        # 暂时无法获取
+        return None
+
+    return get_otp
 
 
 def main():
-    parser = argparse.ArgumentParser(description="stagewise 全自动注册")
-    parser.add_argument("--count", "-n", type=int, default=1, help="注册数量")
-    parser.add_argument("--headless", action="store_true", help="无头模式（默认显示浏览器）")
-    parser.add_argument("--output", "-o", type=str, help="输出 JSON 文件")
-    parser.add_argument("--email", type=str, help="指定邮箱（默认用临时邮箱）")
+    parser = argparse.ArgumentParser(description="stagewise 全自动注册 v2")
+    parser.add_argument("--outlook", action="store_true", help="使用 Outlook + appleemail API")
+    parser.add_argument("--email", type=str, help="邮箱地址")
+    parser.add_argument("--refresh-token", type=str, help="Outlook refresh_token")
+    parser.add_argument("--client-id", type=str, help="Azure client_id")
+    parser.add_argument("--headless", action="store_true", help="无头模式")
+    parser.add_argument("--output", "-o", type=str, help="输出文件")
+    parser.add_argument("--batch-file", type=str, help="批量文件，每行: email|refresh_token|client_id")
     args = parser.parse_args()
 
-    accounts = []
-    for i in range(args.count):
-        print(f"\n--- 第 {i+1}/{args.count} 个账号 ---")
+    if args.batch_file:
+        # 批量模式
+        with open(args.batch_file, encoding="utf-8") as f:
+            accounts = []
+            for line in f:
+                line = line.strip()
+                if line and "|" in line:
+                    parts = line.split("|")
+                    if len(parts) >= 3:
+                        accounts.append((parts[0], parts[1], parts[2]))
+        print(f"批量处理 {len(accounts)} 个账号...")
+        results = []
+        for i, (email, rt, cid) in enumerate(accounts):
+            print(f"\n--- {i+1}/{len(accounts)}: {email} ---")
+            otp_fn = appleemail_otp(email, rt, cid)
 
-        try:
-            tm = None
-            if not args.email:
-                tm = TempMail()
+            # 清空 INBOX
+            requests.post(f"{APPLEEMAIL_API}/api/process-inbox", json={
+                "refresh_token": rt, "client_id": cid, "email": email,
+            })
 
-            result = register(
-                temp_mail=tm,
-                email=args.email if args.count == 1 else None,
-                headless=args.headless,
-            )
+            token = login_with_playwright(email, otp_fn, headless=args.headless)
+            if token:
+                results.append({"email": email, "token": token})
+                print(f"  Token: {token[:30]}...")
+            else:
+                print(f"  失败")
 
-            if tm:
-                tm.cleanup()
+            # 写入实时结果
+            with open(args.output or "stagewise_tokens.txt", "w", encoding="utf-8") as f:
+                for r in results:
+                    f.write(f"{r['email']}|{r['token']}\n")
 
-            if result and result.get("token"):
-                accounts.append(result)
-                if args.output:
-                    with open(args.output, "w", encoding="utf-8") as f:
-                        json.dump(accounts, f, indent=2, ensure_ascii=False)
+        print(f"\n完成: {len(results)}/{len(accounts)}")
 
-        except Exception as e:
-            print(f"  失败: {e}")
-            if args.count == 1:
-                raise
+    elif args.outlook and args.email and args.refresh_token and args.client_id:
+        # 单账号模式
+        otp_fn = appleemail_otp(args.email, args.refresh_token, args.client_id)
 
-    # 输出
-    print(f"\n{'='*50}")
-    print(f"  完成: {len(accounts)}/{args.count}")
-    print(f"{'='*50}")
+        # 清空 INBOX
+        requests.post(f"{APPLEEMAIL_API}/api/process-inbox", json={
+            "refresh_token": args.refresh_token,
+            "client_id": args.client_id,
+            "email": args.email,
+        })
 
-    if accounts:
-        print(f"\n📥 导入 WebUI:\n")
-        print(f"  curl -X POST http://localhost:8080/api/accounts/add-batch \\")
-        print(f'    -H "Content-Type: application/json" \\')
-        print(f"    -d '{json.dumps({'accounts': accounts}, ensure_ascii=False)}'")
-        print()
-        for a in accounts:
-            print(f"  {a['email']}|{a['token']}")
+        print(f"\n登录 {args.email}...")
+        token = login_with_playwright(args.email, otp_fn, headless=args.headless)
+
+        if token:
+            line = f"{args.email}|{token}"
+            print(f"\n=== TOKEN ===")
+            print(line)
+
+            if args.output:
+                with open(args.output, "w", encoding="utf-8") as f:
+                    f.write(line + "\n")
+
+            # 输出 WebUI 导入命令
+            print(f"\n导入 WebUI:")
+            print(f'  curl -X POST http://localhost:8080/api/accounts/add \\')
+            print(f'    -H "Content-Type: application/json" \\')
+            print(f'    -d \'{{"email": "{args.email}", "token": "{token}"}}\'')
+        else:
+            print("登录失败")
+            sys.exit(1)
+
+    else:
+        parser.print_help()
+        print("\n\n需要指定 --outlook 模式和邮箱信息")
 
 
 if __name__ == "__main__":
