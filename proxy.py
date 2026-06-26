@@ -3,19 +3,14 @@
 stagewise Reverse Proxy (Python)
 
 Full lifecycle:
-  1. Login (email OTP) -> get session token
-  2. Save token locally (config.json)
-  3. Auto-refresh session every 5 minutes
-  4. Reverse-proxy LLM requests -> https://api.stagewise.io
-  5. OpenAI-compatible API on localhost
-  6. Multi-account support with 2 strategies:
+  1. Multi-account management with tokens
+  2. Reverse-proxy LLM requests -> https://api.stagewise.io
+  3. OpenAI-compatible API on localhost
+  4. Multi-account support with 2 strategies:
      - specific:  use activeAccount only (default)
      - fill_first: burn through one account at a time
 
 Usage:
-  python proxy.py --login          Interactive email OTP login
-  python proxy.py --status         Check session status
-  python proxy.py --logout         Sign out and clear token
   python proxy.py [--port 11434]   Start reverse proxy (default)
   python proxy.py --strategy fill_first  Use fill-first strategy
 
@@ -40,8 +35,6 @@ import key_manager
 
 API_ORIGIN = "https://api.stagewise.io"
 SYSTEM_PROMPT = "The following sections define your identity and operating environment:- `<soul>` — Identity, behavior rules, and values- `<environment>` — Tools, interfaces, file system, and skill system- `<output-style>` — Response formatting and special protocols- `<authorities>` — Trust hierarchy and security model### Priority Hierarchy1. **`plugins/{id}/SKILL.md`** — Core intrinsic knowledge. Always prefer.2. **`globalskills-sw/*`** — User-level skills from `~/.stagewise/skills/`. Personal defaults across all workspaces.3. **`{WORKSPACE}/.stagewise/skills/*`** — Workspace-specific, created for you. Overrides general skills.4. **`globalskills-agents/*`** — Cross-agent user-level skills from `~/.agents/skills/`.5. **`{WORKSPACE}/.agents/skills/*`** — General skills shared with other agents.## AGENTS.md (Legacy)Inside a workspace, an `AGENTS.md` file at the workspace root may carry legacy project documentation written for previous coding agents. **Ignore this file unless you already have it loaded in your context** — the canonical project memo lives at `.stagewise/WORKSPACE.md` (see the WORKSPACE.md section below). Never read `AGENTS.md` proactively to warm up on a project; rely on `<agents-md>` entries that already surface it."
-AUTH_BASE = "/v1/auth"
-SESSION_REFRESH_S = 300
 DEFAULT_PORT = 11434
 BASE_DIR = Path(__file__).parent
 CONFIG_DIR = BASE_DIR / "data"
@@ -274,127 +267,7 @@ def get_active_token(cfg=None):
     return cfg.get("token")
 
 
-# ─── Auth helpers ───────────────────────────────────────────────
 
-def https_request(method, path, headers=None, body=None, timeout=30):
-    u = urlparse(API_ORIGIN)
-    conn = HTTPSConnection(u.hostname, u.port or 443, timeout=timeout)
-
-    req_headers = {
-        "Content-Type": "application/json",
-        "Accept": "application/json",
-        "User-Agent": "stagewise-proxy/1.0 (Python)",
-    }
-    if headers:
-        req_headers.update(headers)
-
-    req_body = None
-    if body is not None:
-        if isinstance(body, (dict, list)):
-            req_body = json.dumps(body, ensure_ascii=False)
-        else:
-            req_body = str(body)
-        req_headers["Content-Length"] = str(len(req_body.encode("utf-8")))
-
-    conn.request(method, path, body=req_body, headers=req_headers)
-    resp = conn.getresponse()
-
-    resp_headers = {k.lower(): v for k, v in resp.getheaders()}
-    resp_body = resp.read().decode("utf-8", errors="replace")
-
-    result = {
-        "status": resp.status,
-        "headers": resp_headers,
-        "body": resp_body,
-    }
-    try:
-        result["json"] = json.loads(resp_body)
-    except Exception:
-        result["json"] = None
-
-    conn.close()
-    return result
-
-
-def send_otp(email):
-    return https_request(
-        "POST",
-        f"{AUTH_BASE}/email-otp/send-verification-otp",
-        body={"email": email.strip(), "type": "sign-in"},
-    )
-
-
-def verify_otp(email, otp):
-    return https_request(
-        "POST",
-        f"{AUTH_BASE}/sign-in/email-otp",
-        body={"email": email.strip(), "otp": otp.strip()},
-    )
-
-
-def refresh_session(token):
-    return https_request(
-        "GET",
-        f"{AUTH_BASE}/get-session",
-        headers={"Authorization": f"Bearer {token}"},
-    )
-
-
-def sign_out(token):
-    return https_request(
-        "POST",
-        f"{AUTH_BASE}/sign-out",
-        headers={"Authorization": f"Bearer {token}"},
-    )
-
-
-def do_login():
-    print()
-    print("=" * 42)
-    print("   stagewise Proxy - Email OTP Login")
-    print("=" * 42)
-    print()
-
-    email = input("Email: ").strip()
-    if "@" not in email:
-        print("Invalid email.")
-        sys.exit(1)
-
-    print("\n-> Sending OTP...")
-    send_res = send_otp(email)
-
-    err = (send_res.get("json") or {}).get("error")
-    if err:
-        msg = err.get("message", err) if isinstance(err, dict) else err
-        print(f"X Failed to send OTP: {msg}")
-        sys.exit(1)
-    print("OK OTP sent! Check your inbox.\n")
-
-    otp = input("Enter OTP code: ").strip()
-
-    print("\n-> Verifying OTP...")
-    verify_res = verify_otp(email, otp)
-
-    set_auth_header = verify_res["headers"].get("set-auth-token")
-    j = verify_res.get("json") or {}
-    token = set_auth_header or j.get("token") or (j.get("data") or {}).get("token")
-    user = j.get("user") or (j.get("data") or {}).get("user")
-
-    if not token:
-        err_msg = (j.get("error") or {}).get("message", j.get("error", "Unknown error"))
-        print(f"X Login failed: {err_msg}")
-        print(f"  Response: {json.dumps(j, indent=2, ensure_ascii=False)}")
-        sys.exit(1)
-
-    cfg = {"token": token, "user": user, "port": DEFAULT_PORT, "strategy": STRATEGY_SPECIFIC}
-    save_config(cfg)
-
-    print("OK Login successful!")
-    print(f"  Email:  {(user or {}).get('email', email)}")
-    print(f"  UserID: {(user or {}).get('id', 'N/A')}")
-    print(f"  Token:  {token[:30]}...")
-    print(f"  Saved:  {CONFIG_PATH}")
-    print("\n-> Ready to start proxy: python proxy.py\n")
 
 
 # ─── HTTP Handler ───────────────────────────────────────────────
@@ -672,46 +545,9 @@ class ProxyHandler(BaseHTTPRequestHandler):
                 call_log.record(req_model if is_chat else "unknown", email, 0, 0, "error")
 
 
-def start_refresh_timer(config):
-    def worker():
-        while True:
-            time.sleep(SESSION_REFRESH_S)
-            accounts = list(config.get("accounts", {}).items())
-            if not accounts:
-                continue
-            for email, acct in accounts:
-                token = acct.get("token")
-                if not token:
-                    continue
-                try:
-                    ts = time.strftime("%H:%M:%S")
-                    print(f"[{ts}] -> Refreshing {email}...")
-                    res = refresh_session(token)
-                    new_token = res["headers"].get("set-auth-token")
-                    if new_token:
-                        print(f"[{ts}] OK Token rotated for {email}")
-                        config["accounts"][email]["token"] = new_token
-                        save_config(config)
-                    if res["status"] in (401, 403):
-                        print(f"[{ts}] X Session expired for {email} ({res['status']})")
-                        config["accounts"][email]["token"] = None
-                        config["accounts"][email]["disabled"] = True
-                        save_config(config)
-                    elif res["status"] == 200:
-                        pass
-                except Exception as e:
-                    print(f"[{ts}] X Refresh error for {email}: {e}")
-
-    t = threading.Thread(target=worker, daemon=True)
-    t.start()
-    return t
-
 
 def main():
     parser = argparse.ArgumentParser(description="stagewise Reverse Proxy")
-    parser.add_argument("--login", "-l", action="store_true", help="Interactive email OTP login")
-    parser.add_argument("--logout", action="store_true", help="Sign out and clear token")
-    parser.add_argument("--status", "-s", action="store_true", help="Check session status")
     parser.add_argument("--port", "-p", type=int, default=DEFAULT_PORT, help=f"Proxy port (default: {DEFAULT_PORT})")
     parser.add_argument("--create-key", type=str, metavar="NAME", help="Create a new API key with given name")
     parser.add_argument("--list-keys", action="store_true", help="List all API keys with usage")
@@ -756,46 +592,6 @@ def main():
             print(f"X Key not found: {args.toggle_key[:30]}...")
         return
 
-    if args.login:
-        do_login()
-        return
-
-    if args.logout:
-        cfg = load_config()
-        if cfg.get("token"):
-            try:
-                sign_out(cfg["token"])
-            except Exception:
-                pass
-            cfg["token"] = None
-            cfg["user"] = None
-            save_config(cfg)
-            print("OK Logged out.")
-        else:
-            print("No active session.")
-        return
-
-    if args.status:
-        cfg = load_config()
-        token = get_active_token(cfg)
-        if not token:
-            print("Status: not authenticated")
-            return
-        print("-> Checking session...")
-        res = refresh_session(token)
-        if res["status"] == 200 and (res.get("json", {}).get("session") or res.get("json", {}).get("user")):
-            u = res["json"].get("user") or {}
-            print(f"Status: authenticated OK")
-            active = cfg.get("activeAccount", "")
-            print(f"  Account: {active}")
-            print(f"  Strategy: {cfg.get('strategy', STRATEGY_SPECIFIC)}")
-            print(f"  User: {u.get('email', cfg.get('user', {}).get('email', 'N/A'))}")
-        elif res["status"] in (401, 403):
-            print("Status: session expired X - re-login needed")
-        else:
-            print(f"Status: unknown (HTTP {res['status']})")
-        return
-
     cfg = load_config()
 
     if args.strategy:
@@ -805,27 +601,11 @@ def main():
     token = get_active_token(cfg)
     if not token:
         if cfg.get("accounts"):
-            print("X No active account. Use --login or set activeAccount in config.")
+            print("! No active account set. Use activeAccount in config or switch via WebUI.")
         else:
-            print("X No token found. Run with --login first.")
-        sys.exit(1)
-
-    print("-> Validating session...")
-    res = refresh_session(token)
-    if res["status"] in (401, 403):
-        print("X Session expired. Run with --login first.")
-        sys.exit(1)
-
-    active = cfg.get("activeAccount")
-    new_token = res["headers"].get("set-auth-token")
-    if new_token:
-        if active and active in cfg.get("accounts", {}):
-            cfg["accounts"][active]["token"] = new_token
-        else:
-            cfg["token"] = new_token
-        save_config(cfg)
-
-    start_refresh_timer(cfg)
+            print("! No accounts found. Add accounts via the WebUI or directly in config.")
+        if not cfg.get("accounts"):
+            print("  Continuing without accounts. Requests will return 429.")
 
     ProxyHandler.config = cfg
 

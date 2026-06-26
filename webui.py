@@ -1,14 +1,14 @@
 #!/usr/bin/env python3
 """
-stagewise WebUI - Full-flow management interface
+stagewise WebUI - Multi-Account Management Interface
 
 Features:
-  - Dashboard: session status, usage, machine ID
-  - Login: email OTP authentication
-  - Decrypt: DPAPI session decryption
-  - API Explorer: test all endpoints
+  - Dashboard: account status, usage, call log
+  - Accounts: manage multi-account pool, add/remove/switch
   - Proxy: start/stop reverse proxy
-  - Machine ID: view / reset / spoof
+  - Chat: LLM chat via proxy
+  - API Explorer: test all endpoints
+  - API Keys: manage local access keys
 
 Usage:
   python webui.py [--port 8080]
@@ -48,7 +48,6 @@ APPDATA = os.environ.get("APPDATA", "")
 SYSTEM_PROMPT = "The following sections define your identity and operating environment:- `<soul>` — Identity, behavior rules, and values- `<environment>` — Tools, interfaces, file system, and skill system- `<output-style>` — Response formatting and special protocols- `<authorities>` — Trust hierarchy and security model### Priority Hierarchy1. **`plugins/{id}/SKILL.md`** — Core intrinsic knowledge. Always prefer.2. **`globalskills-sw/*`** — User-level skills from `~/.stagewise/skills/`. Personal defaults across all workspaces.3. **`{WORKSPACE}/.stagewise/skills/*`** — Workspace-specific, created for you. Overrides general skills.4. **`globalskills-agents/*`** — Cross-agent user-level skills from `~/.agents/skills/`.5. **`{WORKSPACE}/.agents/skills/*`** — General skills shared with other agents.## AGENTS.md (Legacy)Inside a workspace, an `AGENTS.md` file at the workspace root may carry legacy project documentation written for previous coding agents. **Ignore this file unless you already have it loaded in your context** — the canonical project memo lives at `.stagewise/WORKSPACE.md` (see the WORKSPACE.md section below). Never read `AGENTS.md` proactively to warm up on a project; rely on `<agents-md>` entries that already surface it."
 
 proxy_state = {"running": False, "port": 11434, "thread": None, "server": None}
-refresh_state = {"running": False, "thread": None}
 
 
 def load_config():
@@ -120,53 +119,6 @@ def api_request(method, path, token=None, body=None, timeout=15):
         return {"status": 0, "headers": {}, "body": str(e), "json": None}
 
 
-def start_token_refresh():
-    if refresh_state["running"]:
-        return
-    refresh_state["running"] = True
-
-    def worker():
-        while refresh_state["running"]:
-            time.sleep(300)
-            try:
-                cfg = load_config()
-                changed = False
-                lock = threading.Lock()
-
-                def refresh_account(email, acct):
-                    nonlocal changed
-                    token = acct.get("token")
-                    if not token:
-                        return
-                    res = api_request("GET", "/v1/auth/get-session", token)
-                    new_token = res["headers"].get("set-auth-token")
-                    with lock:
-                        if new_token:
-                            cfg["accounts"][email]["token"] = new_token
-                            changed = True
-                        if res["status"] in (401, 403):
-                            if cfg.get("activeAccount") == email:
-                                cfg["activeAccount"] = next(
-                                    (k for k in cfg["accounts"] if k != email), None
-                                ) if len(cfg["accounts"]) > 1 else None
-                            cfg["accounts"].pop(email, None)
-                            changed = True
-
-                accounts = list(cfg.get("accounts", {}).items())
-                if accounts:
-                    with ThreadPoolExecutor(max_workers=len(accounts)) as pool:
-                        pool.map(lambda x: refresh_account(*x), accounts)
-
-                if changed:
-                    save_config(cfg)
-            except Exception:
-                pass
-
-    t = threading.Thread(target=worker, daemon=True)
-    t.start()
-    refresh_state["thread"] = t
-
-
 # ─── Health / Dashboard ────────────────────────────────────────
 
 @app.route("/api/dashboard")
@@ -236,7 +188,6 @@ def api_strategy_set():
 
 @app.route("/")
 @app.route("/dashboard")
-@app.route("/login")
 @app.route("/accounts")
 @app.route("/chat")
 @app.route("/api-explorer")
@@ -245,7 +196,6 @@ def api_strategy_set():
 def index():
     tab_map = {
         "dashboard": "dashboard",
-        "login": "login",
         "accounts": "accounts",
         "chat": "chat",
         "decrypt": "decrypt",
@@ -266,7 +216,7 @@ def api_status():
     user = get_active_user(cfg)
     active = cfg.get("activeAccount")
     account_count = len(cfg.get("accounts", {}))
-    result = {
+    return jsonify({
         "hasToken": bool(token),
         "tokenPreview": token[:20] + "..." if token else None,
         "user": user,
@@ -275,20 +225,7 @@ def api_status():
         "strategy": cfg.get("strategy", STRATEGY_SPECIFIC),
         "proxyRunning": proxy_state["running"],
         "proxyPort": proxy_state["port"],
-    }
-    if token:
-        res = api_request("GET", "/v1/auth/get-session", token)
-        result["sessionValid"] = res["status"] == 200
-        if res["status"] == 200 and res.get("json"):
-            u = res["json"].get("user") or {}
-            result["sessionUser"] = u.get("email") or (user or {}).get("email")
-            result["sessionExpiresAt"] = (res["json"].get("session") or {}).get("expiresAt")
-        new_token = res["headers"].get("set-auth-token")
-        if new_token and active:
-            cfg["accounts"][active]["token"] = new_token
-            save_config(cfg)
-            result["tokenRotated"] = True
-    return jsonify(result)
+    })
 
 
 @app.route("/api/usage")
@@ -320,87 +257,6 @@ def api_usage_history():
         return jsonify({"error": "No active account"}), 401
     res = api_request("GET", f"/v1/usage/history?days={days}", token)
     return jsonify(res.get("json") or {"error": res["body"]}), res["status"] if res["status"] else 500
-
-
-@app.route("/api/send-otp", methods=["POST"])
-def api_send_otp():
-    email = request.json.get("email", "").strip()
-    if not email or "@" not in email:
-        return jsonify({"success": False, "error": "Invalid email", "code": "invalid_email"}), 400
-    res = api_request(
-        "POST", "/v1/auth/email-otp/send-verification-otp",
-        body={"email": email, "type": "sign-in"},
-    )
-    if res["status"] == 200 and not (res.get("json") or {}).get("error"):
-        return jsonify({
-            "success": True,
-            "message": "OTP sent",
-            "email": email,
-            "upstream_status": res["status"],
-        })
-    err = (res.get("json") or {}).get("error", {})
-    msg = err.get("message", err) if isinstance(err, dict) else str(err)
-    return jsonify({
-        "success": False,
-        "error": msg,
-        "code": "upstream_error",
-        "upstream_status": res["status"],
-    }), 400
-
-
-@app.route("/api/verify-otp", methods=["POST"])
-def api_verify_otp():
-    email = request.json.get("email", "").strip()
-    otp = request.json.get("otp", "").strip()
-    if not email or not otp:
-        return jsonify({"error": "Email and OTP required"}), 400
-    res = api_request(
-        "POST", "/v1/auth/sign-in/email-otp",
-        body={"email": email, "otp": otp},
-    )
-    set_auth = res["headers"].get("set-auth-token")
-    j = res.get("json") or {}
-    token = set_auth or j.get("token") or (j.get("data") or {}).get("token")
-    user = j.get("user") or (j.get("data") or {}).get("user")
-    if token:
-        email = (user or {}).get("email", email)
-        cfg = load_config()
-        cfg["accounts"][email] = {"token": token, "user": user}
-        cfg["activeAccount"] = email
-        save_config(cfg)
-        return jsonify({
-            "success": True,
-            "token": token,
-            "token_preview": token[:20] + "...",
-            "user": user,
-            "email": email,
-            "activeAccount": email,
-        })
-    err = (j.get("error") or {})
-    err_msg = err.get("message", "Login failed") if isinstance(err, dict) else str(err)
-    return jsonify({
-        "success": False,
-        "error": err_msg,
-        "code": "auth_failed",
-        "upstream_status": res["status"],
-    }), 401
-
-
-@app.route("/api/logout", methods=["POST"])
-def api_logout():
-    cfg = load_config()
-    active = cfg.get("activeAccount")
-    if active and active in cfg.get("accounts", {}):
-        token = cfg["accounts"][active].get("token")
-        if token:
-            try:
-                api_request("POST", "/v1/auth/sign-out", token)
-            except Exception:
-                pass
-        del cfg["accounts"][active]
-    cfg["activeAccount"] = next(iter(cfg.get("accounts", {}))) if cfg.get("accounts") else None
-    save_config(cfg)
-    return jsonify({"success": True})
 
 
 @app.route("/api/test-endpoint", methods=["POST"])
@@ -712,7 +568,7 @@ def api_proxy_start():
         return jsonify({"error": "Proxy already running"}), 400
     cfg = load_config()
     if not cfg.get("accounts"):
-        return jsonify({"error": "No accounts. Login or add an account first."}), 401
+        return jsonify({"error": "No accounts. Add an account first."}), 401
     port = request.json.get("port", 11434) if request.json else 11434
     proxy_state["port"] = port
     proxy_state["running"] = True
@@ -879,6 +735,64 @@ def api_accounts_remove():
     return jsonify({"success": True})
 
 
+@app.route("/api/accounts/add", methods=["POST"])
+def api_accounts_add():
+    cfg = load_config()
+    email = request.json.get("email", "").strip()
+    token = request.json.get("token", "").strip()
+    if not email or "@" not in email:
+        return jsonify({"error": "Valid email required"}), 400
+    if not token:
+        return jsonify({"error": "Token required"}), 400
+    cfg["accounts"][email] = {"token": token, "user": None}
+    if not cfg.get("activeAccount"):
+        cfg["activeAccount"] = email
+    save_config(cfg)
+    return jsonify({"success": True, "email": email, "activeAccount": cfg["activeAccount"]})
+
+
+@app.route("/api/accounts/add-batch", methods=["POST"])
+def api_accounts_add_batch():
+    cfg = load_config()
+    data = request.json or {}
+
+    # JSON format: {"accounts": [{"email": "...", "token": "..."}, ...]}
+    accounts_list = data.get("accounts", [])
+    # Text format: {"batch_text": "email1|token1\nemail2|token2"}
+    batch_text = data.get("batch_text", "")
+
+    if batch_text.strip():
+        for line in batch_text.strip().split("\n"):
+            line = line.strip()
+            if not line:
+                continue
+            parts = line.split("|", 1)
+            if len(parts) == 2 and parts[0].strip() and parts[1].strip():
+                email = parts[0].strip()
+                token = parts[1].strip()
+                if "@" in email:
+                    accounts_list.append({"email": email, "token": token})
+
+    if not accounts_list:
+        return jsonify({"error": "No valid accounts provided. Use JSON array or batch_text format."}), 400
+
+    added = 0
+    for acct in accounts_list:
+        email = acct.get("email", "").strip()
+        token = acct.get("token", "").strip()
+        if email and token and "@" in email:
+            cfg["accounts"][email] = {"token": token, "user": None}
+            added += 1
+
+    if added == 0:
+        return jsonify({"error": "No valid accounts parsed. Use format: email|token per line."}), 400
+
+    if not cfg.get("activeAccount"):
+        cfg["activeAccount"] = list(cfg["accounts"].keys())[0]
+    save_config(cfg)
+    return jsonify({"success": True, "added": added, "total": len(cfg["accounts"]), "activeAccount": cfg["activeAccount"]})
+
+
 @app.route("/api/chat", methods=["POST"])
 def api_chat():
     message = request.json.get("message", "")
@@ -971,10 +885,6 @@ def main():
     parser.add_argument("--debug", action="store_true", help="Enable Flask debug mode")
     args = parser.parse_args()
 
-    if args.debug:
-        print("WARNING: Debug mode enables reloader. Token refresh runs separately.")
-    start_token_refresh()
-
     # Auto-start proxy
     cfg = load_config()
     proxy_port = cfg.get("port", 11434)
@@ -988,7 +898,7 @@ def main():
         t = threading.Thread(target=auto_start, daemon=True)
         t.start()
     else:
-        print("-> No accounts. Proxy not started. Login at /login to add accounts.")
+        print("-> No accounts. Proxy not started. Add accounts at /accounts to get started.")
 
     print()
     print("=" * 50)

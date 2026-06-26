@@ -42,7 +42,6 @@ tailwind.config = {
 
 <div class="border-b border-slate-200 bg-white px-6 flex overflow-x-auto gap-1">
   <a href="/dashboard" class="tab-btn px-4 py-3 text-sm font-medium text-slate-500 border-b-2 border-transparent cursor-pointer hover:text-slate-700 no-underline" data-tab="dashboard">Dashboard</a>
-  <a href="/login" class="tab-btn px-4 py-3 text-sm font-medium text-slate-500 border-b-2 border-transparent cursor-pointer hover:text-slate-700 no-underline" data-tab="login">Login</a>
   <a href="/accounts" class="tab-btn px-4 py-3 text-sm font-medium text-slate-500 border-b-2 border-transparent cursor-pointer hover:text-slate-700 no-underline" data-tab="accounts">Accounts</a>
   <a href="/chat" class="tab-btn px-4 py-3 text-sm font-medium text-slate-500 border-b-2 border-transparent cursor-pointer hover:text-slate-700 no-underline" data-tab="chat">Chat</a>
   <a href="/api-explorer" class="tab-btn px-4 py-3 text-sm font-medium text-slate-500 border-b-2 border-transparent cursor-pointer hover:text-slate-700 no-underline" data-tab="api">API Explorer</a>
@@ -90,25 +89,37 @@ tailwind.config = {
   </div>
 </div>
 
-<!-- ═══ Login ═══ -->
-<div class="tab-content" id="panel-login">
-  <div class="bg-white rounded-xl border border-slate-200 p-6 shadow-sm max-w-md">
-    <h2 class="text-base font-semibold text-slate-900 mb-4">Email OTP Login</h2>
-    <div class="mb-3"><label class="block text-xs text-slate-500 mb-1">Email</label><input type="email" id="loginEmail" placeholder="user@example.com" class="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 outline-none"></div>
-    <div id="otpSection" style="display:none">
-      <div class="mb-3"><label class="block text-xs text-slate-500 mb-1">OTP Code</label><input type="text" id="loginOtp" placeholder="6-digit code" maxlength="6" class="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm focus:ring-2 focus:ring-indigo-500 outline-none"></div>
-      <div class="flex gap-2 mb-3"><button class="px-4 py-2 bg-indigo-600 text-white rounded-lg text-sm font-medium hover:bg-indigo-700" onclick="verifyOtp()">Verify & Login</button></div>
-    </div>
-    <div class="flex gap-2">
-      <button class="px-4 py-2 bg-indigo-600 text-white rounded-lg text-sm font-medium hover:bg-indigo-700 disabled:opacity-50" id="btnSendOtp" onclick="sendOtp()">Send OTP</button>
-      <button class="px-4 py-2 bg-red-600 text-white rounded-lg text-sm font-medium hover:bg-red-700" onclick="logout()">Logout Active</button>
-    </div>
-    <div id="loginResult" class="mt-3"></div>
-  </div>
-</div>
-
 <!-- ═══ Accounts ═══ -->
 <div class="tab-content" id="panel-accounts">
+  <!-- Add Account Section -->
+  <div class="bg-white rounded-xl border border-slate-200 p-6 shadow-sm mb-4">
+    <h2 class="text-base font-semibold text-slate-900 mb-4">Add Account</h2>
+    <div class="mb-4">
+      <div class="grid grid-cols-2 gap-3 mb-3">
+        <div>
+          <label class="block text-xs text-slate-500 mb-1">Email</label>
+          <input type="email" id="addAcctEmail" placeholder="user@example.com" class="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm focus:ring-2 focus:ring-indigo-500 outline-none">
+        </div>
+        <div>
+          <label class="block text-xs text-slate-500 mb-1">Token</label>
+          <input type="text" id="addAcctToken" placeholder="Paste token here" class="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm focus:ring-2 focus:ring-indigo-500 outline-none font-mono">
+        </div>
+      </div>
+      <button class="px-4 py-2 bg-indigo-600 text-white rounded-lg text-sm font-medium hover:bg-indigo-700 disabled:opacity-50" id="btnAddAccount" onclick="addAccount()">Add Account</button>
+    </div>
+
+    <details class="mt-4">
+      <summary class="text-sm font-medium text-indigo-600 cursor-pointer hover:text-indigo-800">Batch Import (click to expand)</summary>
+      <div class="mt-3">
+        <p class="text-xs text-slate-500 mb-2">Paste one account per line in the format: <code class="text-xs bg-slate-100 px-1 py-0.5 rounded">email|token</code></p>
+        <textarea id="batchImportText" placeholder="email1@example.com|token1&#10;email2@example.com|token2&#10;email3@example.com|token3" rows="5" class="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm focus:ring-2 focus:ring-indigo-500 outline-none resize-y font-mono mb-3"></textarea>
+        <button class="px-4 py-2 bg-emerald-600 text-white rounded-lg text-sm font-medium hover:bg-emerald-700 disabled:opacity-50" id="btnBatchImport" onclick="batchImport()">Import Batch</button>
+        <span id="batchResult" class="text-sm ml-3"></span>
+      </div>
+    </details>
+  </div>
+
+  <!-- Accounts List Section -->
   <div class="bg-white rounded-xl border border-slate-200 p-6 shadow-sm">
     <div class="flex items-center justify-between mb-4">
       <div>
@@ -259,7 +270,7 @@ let chatAbortController = null;
 
 // ─── URL / Tab routing ───
 const TAB_ROUTES = {
-  'dashboard': '/dashboard', 'login': '/login', 'accounts': '/accounts',
+  'dashboard': '/dashboard', 'accounts': '/accounts',
   'chat': '/chat', 'decrypt': '/decrypt', 'api': '/api-explorer',
   'proxy': '/proxy', 'apikeys': '/apikeys',
 };
@@ -456,40 +467,6 @@ function renderAccountStatus(accts) {
     }).join('')}</div>`;
 }
 
-// ─── Login ───
-async function sendOtp() {
-  const email = document.getElementById('loginEmail').value.trim();
-  if (!email) { toast('Enter email','error'); return; }
-  document.getElementById('btnSendOtp').disabled = true;
-  const r = await api('/api/send-otp', {body:{email}});
-  document.getElementById('btnSendOtp').disabled = false;
-  if (r && r.success) {
-    toast('OTP sent to ' + email, 'success');
-    document.getElementById('otpSection').style.display = 'block';
-  }
-}
-
-async function verifyOtp() {
-  const email = document.getElementById('loginEmail').value.trim();
-  const otp = document.getElementById('loginOtp').value.trim();
-  if (!otp) { toast('Enter OTP','error'); return; }
-  const r = await api('/api/verify-otp', {body:{email,otp}});
-  if (r && r.success) {
-    toast('Login successful! Active account: ' + (r.activeAccount || email), 'success');
-    document.getElementById('loginResult').innerHTML = `<pre class="text-xs bg-slate-50 rounded-lg p-3 border border-slate-200 mt-2">Token: ${r.token}\nUser: ${JSON.stringify(r.user,null,2)}</pre>`;
-    document.getElementById('otpSection').style.display = 'none';
-    refreshDashboard();
-  }
-}
-
-async function logout() {
-  const r = await api('/api/logout', {method:'POST'});
-  if (r && r.success) toast('Logged out active account', 'info');
-  document.getElementById('otpSection').style.display = 'none';
-  document.getElementById('loginResult').innerHTML = '';
-  refreshDashboard();
-}
-
 // ─── Accounts ───
 let _accountsData = null;
 let _acctPage = 1;
@@ -512,7 +489,7 @@ async function loadAccounts(silent) {
 function renderAccounts() {
   const el = document.getElementById('accountsList');
   if (!_accountsData || _accountsData.length === 0) {
-    el.innerHTML = '<div class="text-slate-500 text-sm">No accounts. Login first or use Decrypt to add one.</div>';
+    el.innerHTML = '<div class="text-slate-500 text-sm">No accounts. Use the form above to add one.</div>';
     return;
   }
   const total = _accountsData.length;
@@ -590,6 +567,42 @@ async function removeAccount(email) {
   if (!confirm('Remove account ' + email + '?')) return;
   const r = await api('/api/accounts/remove', {body:{email}});
   if (r && r.success) { toast('Removed ' + email, 'info'); loadAccounts(); refreshDashboard(); }
+}
+
+// ─── Add Accounts ───
+async function addAccount() {
+  const email = document.getElementById('addAcctEmail').value.trim();
+  const token = document.getElementById('addAcctToken').value.trim();
+  if (!email) { toast('Enter email', 'error'); return; }
+  if (!token) { toast('Enter token', 'error'); return; }
+  document.getElementById('btnAddAccount').disabled = true;
+  const r = await api('/api/accounts/add', {body:{email, token}});
+  document.getElementById('btnAddAccount').disabled = false;
+  if (r && r.success) {
+    toast('Added account: ' + email, 'success');
+    document.getElementById('addAcctEmail').value = '';
+    document.getElementById('addAcctToken').value = '';
+    loadAccounts();
+    refreshDashboard();
+  }
+}
+
+async function batchImport() {
+  const text = document.getElementById('batchImportText').value.trim();
+  if (!text) { toast('Paste account data first', 'error'); return; }
+  document.getElementById('btnBatchImport').disabled = true;
+  document.getElementById('batchResult').textContent = 'Importing...';
+  const r = await api('/api/accounts/add-batch', {body:{batch_text: text}});
+  document.getElementById('btnBatchImport').disabled = false;
+  if (r && r.success) {
+    document.getElementById('batchResult').textContent = '';
+    toast('Imported ' + r.added + ' accounts (total: ' + r.total + ')', 'success');
+    document.getElementById('batchImportText').value = '';
+    loadAccounts();
+    refreshDashboard();
+  } else {
+    document.getElementById('batchResult').textContent = '';
+  }
 }
 
 // ─── Chat ───
