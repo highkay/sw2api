@@ -115,7 +115,14 @@ def handle_upstream_status(email, status, cfg):
         print(f"[{ts}] {email} cooled down {COOLDOWN_5XX}s (5xx)")
         return 429, COOLDOWN_5XX
 
-    if status in (401, 402, 403):
+    if status == 401:
+        state = get_account_state(email)
+        state.set_cooldown(COOLDOWN_429)
+        ts = time.strftime("%H:%M:%S")
+        print(f"[{ts}] {email} cooled down {COOLDOWN_429}s (401)")
+        return 429, COOLDOWN_429
+
+    if status in (402, 403):
         if email in cfg.get("accounts", {}):
             cfg["accounts"][email]["disabled"] = True
             save_config(cfg)
@@ -230,6 +237,16 @@ MODELS = [
     {"id": "mimo-v2.5-pro", "object": "model", "owned_by": "xiaomi-mimo"},
     {"id": "mimo-v2.5", "object": "model", "owned_by": "xiaomi-mimo"},
 ]
+
+MODEL_PROVIDER = {m["id"]: m["owned_by"] for m in MODELS}
+
+
+def resolve_model(model):
+    if "/" not in model:
+        prefix = MODEL_PROVIDER.get(model)
+        if prefix:
+            model = f"{prefix}/{model}"
+    return model
 
 
 def ensure_config_dir():
@@ -371,6 +388,7 @@ class ProxyHandler(BaseHTTPRequestHandler):
                 try:
                     req = json.loads(body.decode("utf-8"))
                     req_model = req.get("model", "unknown")
+                    req["model"] = resolve_model(req["model"])
                     req.setdefault("reasoning", {"enabled": True, "effort": "low"})
                     req.setdefault("provider", {"require_parameters": True})
                     req.setdefault("messages", []).insert(0, {"role": "system", "content": SYSTEM_PROMPT})

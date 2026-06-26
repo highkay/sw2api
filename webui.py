@@ -33,7 +33,7 @@ import call_log
 from proxy import (
     STRATEGY_SPECIFIC, STRATEGY_FILL_FIRST,
     select_account, get_account_state, AccountState,
-    handle_upstream_status, next_available_in,
+    handle_upstream_status, next_available_in, resolve_model,
 )
 
 app = Flask(__name__)
@@ -401,6 +401,7 @@ def _start_proxy_instance(port):
                     try:
                         req = json.loads(body.decode("utf-8"))
                         req_model = req.get("model", "unknown")
+                        req["model"] = resolve_model(req["model"])
                         req.setdefault("reasoning", {"enabled": True, "effort": "low"})
                         req.setdefault("provider", {"require_parameters": True})
                         req.setdefault("messages", []).insert(0, {"role": "system", "content": SYSTEM_PROMPT})
