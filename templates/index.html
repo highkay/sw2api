@@ -572,7 +572,8 @@ async function addAccount() {
   const r = await api('/api/accounts/add', {body:{email, token}});
   document.getElementById('btnAddAccount').disabled = false;
   if (r && r.success) {
-    toast('Added account: ' + email, 'success');
+    const statusMsg = r.status === 'overwritten' ? 'Overwrote token for: ' + email : r.status === 'exists' ? 'Already exists: ' + email : 'Added account: ' + email;
+    toast(statusMsg, r.status === 'added' ? 'success' : 'info');
     document.getElementById('addAcctEmail').value = '';
     document.getElementById('addAcctToken').value = '';
     if (typeof r.index === 'number' && r.index >= 0) _acctPage = Math.floor(r.index / ACCT_PAGE_SIZE) + 1;

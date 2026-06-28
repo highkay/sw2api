@@ -723,19 +723,36 @@ def api_accounts_remove():
 @app.route("/api/accounts/add", methods=["POST"])
 def api_accounts_add():
     cfg = load_config()
-    email = request.json.get("email", "").strip()
-    token = request.json.get("token", "").strip()
-    if not email or "@" not in email:
+    data = request.json
+    if not isinstance(data, dict):
+        return jsonify({"error": "Invalid request body"}), 400
+    email = data.get("email")
+    token = data.get("token")
+    if not isinstance(email, str) or not isinstance(token, str):
+        return jsonify({"error": "email and token must be strings"}), 400
+    email = email.strip()
+    token = token.strip()
+    if not email or "@" not in email or email.startswith("@") or email.endswith("@"):
         return jsonify({"error": "Valid email required"}), 400
     if not token:
         return jsonify({"error": "Token required"}), 400
-    cfg["accounts"][email] = {"token": token, "user": None}
+
+    accounts = cfg.get("accounts", {})
+    status = "added"
+    if email in accounts:
+        if accounts[email].get("token") == token:
+            return jsonify({"success": True, "email": email, "activeAccount": cfg.get("activeAccount"), "status": "exists", "index": list(accounts.keys()).index(email)})
+        accounts[email]["token"] = token
+        status = "overwritten"
+    else:
+        accounts[email] = {"token": token, "user": None}
+    cfg["accounts"] = accounts
     if not cfg.get("activeAccount"):
         cfg["activeAccount"] = email
     save_config(cfg)
-    emails = list(cfg["accounts"].keys())
+    emails = list(accounts.keys())
     index = emails.index(email)
-    return jsonify({"success": True, "email": email, "activeAccount": cfg["activeAccount"], "index": index})
+    return jsonify({"success": True, "email": email, "activeAccount": cfg["activeAccount"], "status": status, "index": index})
 
 
 @app.route("/api/accounts/add-batch", methods=["POST"])
@@ -816,14 +833,13 @@ def api_accounts_add_batch():
     if added > 0:
         save_config(cfg)
 
-    new_emails = [e for _, _, e, _ in raw_items if e in existing and e not in [o["email"] for o in overwritten]]
     first_index = -1
     if added > 0 and existing:
         emails = list(existing.keys())
-        for e in raw_items:
-            target = e[2]
-            if target in existing:
-                first_index = emails.index(target)
+        changed = [o["email"] for o in overwritten]
+        for source, line_no, email, token in raw_items:
+            if email in changed or (email in existing and email not in [s["email"] for s in skipped_dup]):
+                first_index = emails.index(email)
                 break
 
     return jsonify({
