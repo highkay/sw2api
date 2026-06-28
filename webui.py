@@ -89,14 +89,18 @@ def get_active_user(cfg=None):
     return None
 
 
+ELECTRON_UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) stagewise/1.13.0 Chrome/144.0.7559.236 Electron/40.10.3 Safari/537.36"
+
+
 def api_request(method, path, token=None, body=None, timeout=15):
     conn = HTTPSConnection(API_HOST, timeout=timeout)
     headers = {
-        "Accept": "application/json",
-        "X-Stagewise-Client": "electron/1.10.2",
+        "x-skip-oauth-proxy": "true",
+        "electron-origin": "stagewise:/",
+        "user-agent": ELECTRON_UA,
     }
     if token:
-        headers["Authorization"] = f"Bearer {token}"
+        headers["authorization"] = f"Bearer {token}"
     req_body = None
     if body is not None:
         req_body = json.dumps(body, ensure_ascii=False).encode("utf-8")
@@ -385,11 +389,10 @@ def _start_proxy_instance(port):
             if is_chat:
                 path = path.replace("/v1/chat/completions", "/v1/ai/chat/completions")
                 uh = {
-                    "Authorization": f"Bearer {token}",
-                    "Content-Type": "application/json",
-                    "Accept": "application/json",
-                    "User-Agent": "ai-sdk/openai-compatible/2.0.47 ai-sdk/provider-utils/4.0.27 runtime/node.js/24",
-                    "X-Stagewise-Client": "electron/1.11.0",
+                    "authorization": f"Bearer {token}",
+                    "content-type": "application/json",
+                    "user-agent": "ai-sdk/openai-compatible/2.0.47 ai-sdk/provider-utils/4.0.27 runtime/node.js/24",
+                    "x-stagewise-client": "electron/1.13.0",
                     "Host": target.hostname,
                 }
                 if body:
@@ -708,6 +711,51 @@ def api_accounts_refresh_usage():
         save_config(cfg)
 
     return jsonify({"success": True, "enabled": enabled_count, "total": len(accounts)})
+
+@app.route("/api/accounts/refresh-token", methods=["POST"])
+def api_accounts_refresh_token():
+    """Refresh a single account's token via get-session. Updates token in config if renewed."""
+    cfg = load_config()
+    email = (request.json or {}).get("email", "").strip()
+    accounts = cfg.get("accounts", {})
+    if email not in accounts:
+        return jsonify({"error": "Account not found"}), 404
+    token = accounts[email].get("token")
+    if not token:
+        return jsonify({"error": "No token for account"}), 400
+
+    res = api_request("GET", "/v1/auth/get-session", token, timeout=15)
+    if res["status"] != 200:
+        return jsonify({"error": f"get-session failed: {res['status']}", "status": res["status"]}), 502
+
+    new_token = res["headers"].get("set-auth-token")
+    session = (res.get("json") or {}).get("session") or {}
+    expires_at = session.get("expiresAt")
+    needs_refresh = session.get("needsRefresh", False)
+
+    if not new_token and needs_refresh:
+        res2 = api_request("POST", "/v1/auth/get-session", token, timeout=15)
+        if res2["status"] == 200:
+            new_token = res2["headers"].get("set-auth-token")
+            session2 = (res2.get("json") or {}).get("session") or {}
+            if session2.get("expiresAt"):
+                expires_at = session2.get("expiresAt")
+
+    refreshed = False
+    if new_token and new_token != token:
+        accounts[email]["token"] = new_token
+        cfg["accounts"] = accounts
+        save_config(cfg)
+        refreshed = True
+
+    return jsonify({
+        "success": True,
+        "email": email,
+        "refreshed": refreshed,
+        "expiresAt": expires_at,
+        "tokenPreview": (accounts[email]["token"][:20] + "...") if accounts[email].get("token") else None,
+    })
+
 
 @app.route("/api/accounts/enable", methods=["POST"])
 def api_accounts_enable():

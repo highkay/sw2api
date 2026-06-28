@@ -48,6 +48,17 @@ tailwind.config = {
   <a href="/proxy" class="tab-btn px-4 py-3 text-sm font-medium text-slate-500 border-b-2 border-transparent cursor-pointer hover:text-slate-700 no-underline" data-tab="proxy">Proxy</a>
 </div>
 
+<div id="tokenProgress" class="fixed top-16 right-4 z-50 hidden bg-white rounded-xl border border-slate-200 shadow-lg p-4 w-72">
+  <div class="flex items-center justify-between mb-2">
+    <span class="text-sm font-semibold text-slate-900">Updating Tokens</span>
+    <span id="tokenProgressCount" class="text-xs text-slate-500">0/0</span>
+  </div>
+  <div class="w-full bg-slate-100 rounded-full h-2 overflow-hidden mb-2">
+    <div id="tokenProgressFill" class="bg-amber-500 h-full rounded-full transition-all duration-300" style="width:0%"></div>
+  </div>
+  <div id="tokenProgressLabel" class="text-xs text-slate-500 truncate">Starting...</div>
+</div>
+
 <div class="max-w-7xl mx-auto p-6">
 
 <!-- ═══ Dashboard ═══ -->
@@ -126,6 +137,7 @@ tailwind.config = {
         <p class="text-sm text-slate-500">Manage stagewise accounts. Usage data fetched from API.</p>
       </div>
       <div class="flex items-center gap-2 text-xs text-slate-500">
+        <button class="px-3 py-1.5 text-xs font-medium bg-amber-600 text-white rounded-lg hover:bg-amber-700 disabled:opacity-50" id="btnUpdateTokens" onclick="updateAllTokens()">Update</button>
         <button class="px-3 py-1.5 text-xs font-medium bg-indigo-600 text-white rounded-lg hover:bg-indigo-700" onclick="loadAccounts(false, true)">Refresh</button>
       </div>
     </div>
@@ -550,6 +562,75 @@ function renderAccounts() {
 function goAcctPage(p) {
   _acctPage = p;
   loadAccounts(true);
+}
+
+// ─── Update All Tokens (refresh one by one, earliest expiry first) ───
+let _tokenUpdateRunning = false;
+
+async function updateAllTokens() {
+  if (_tokenUpdateRunning) return;
+  const btn = document.getElementById('btnUpdateTokens');
+  if (btn) btn.disabled = true;
+  _tokenUpdateRunning = true;
+
+  // Fetch all accounts (no refresh, just metadata + expiresAt)
+  const r = await api('/api/accounts?page=1&per_page=0', {silent:true});
+  if (!r || !r.accounts || r.accounts.length === 0) {
+    toast('No accounts to update', 'error');
+    if (btn) btn.disabled = false;
+    _tokenUpdateRunning = false;
+    return;
+  }
+
+  // Sort by expiresAt ascending (earliest expiry first); null/missing expiresAt treated as earliest (most urgent)
+  const sorted = r.accounts.slice().sort((a, b) => {
+    const ta = a.expiresAt ? new Date(a.expiresAt).getTime() : -1;
+    const tb = b.expiresAt ? new Date(b.expiresAt).getTime() : -1;
+    return ta - tb;
+  });
+
+  const total = sorted.length;
+  let done = 0;
+  let renewed = 0;
+  let failed = 0;
+
+  const prog = document.getElementById('tokenProgress');
+  const fill = document.getElementById('tokenProgressFill');
+  const label = document.getElementById('tokenProgressLabel');
+  const count = document.getElementById('tokenProgressCount');
+  prog.classList.remove('hidden');
+  fill.style.width = '0%';
+  count.textContent = `0/${total}`;
+  label.textContent = 'Starting...';
+
+  for (const acct of sorted) {
+    label.textContent = acct.email;
+    label.title = acct.email;
+    try {
+      const res = await api('/api/accounts/refresh-token', {body: {email: acct.email}, silent: true, throwErr: false});
+      if (res && res.success) {
+        if (res.refreshed) renewed++;
+      } else {
+        failed++;
+      }
+    } catch (e) {
+      failed++;
+    }
+    done++;
+    const pct = Math.round((done / total) * 100);
+    fill.style.width = pct + '%';
+    count.textContent = `${done}/${total}`;
+    // small delay to avoid hammering upstream
+    await new Promise(res => setTimeout(res, 300));
+  }
+
+  label.textContent = `Done · ${renewed} renewed, ${failed} failed`;
+  toast(`Token update complete: ${renewed} renewed, ${failed} failed`, failed > 0 ? 'info' : 'success');
+  await loadAccounts(true);
+  refreshAccounts();
+  setTimeout(() => prog.classList.add('hidden'), 4000);
+  if (btn) btn.disabled = false;
+  _tokenUpdateRunning = false;
 }
 
 async function switchAccount(email) {

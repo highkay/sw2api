@@ -375,11 +375,10 @@ class ProxyHandler(BaseHTTPRequestHandler):
         if is_chat:
             path = path.replace("/v1/chat/completions", "/v1/ai/chat/completions")
             upstream_headers = {
-                "Authorization": f"Bearer {token}",
-                "Content-Type": "application/json",
-                "Accept": "application/json",
-                "User-Agent": "ai-sdk/openai-compatible/2.0.47 ai-sdk/provider-utils/4.0.27 runtime/node.js/24",
-                "X-Stagewise-Client": "electron/1.11.0",
+                "authorization": f"Bearer {token}",
+                "content-type": "application/json",
+                "user-agent": "ai-sdk/openai-compatible/2.0.47 ai-sdk/provider-utils/4.0.27 runtime/node.js/24",
+                "x-stagewise-client": "electron/1.13.0",
                 "Host": target.hostname,
             }
             if body:
