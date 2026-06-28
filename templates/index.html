@@ -575,6 +575,7 @@ async function addAccount() {
     toast('Added account: ' + email, 'success');
     document.getElementById('addAcctEmail').value = '';
     document.getElementById('addAcctToken').value = '';
+    if (typeof r.index === 'number' && r.index >= 0) _acctPage = Math.floor(r.index / ACCT_PAGE_SIZE) + 1;
     loadAccounts();
     refreshDashboard();
   }
@@ -599,6 +600,7 @@ async function batchImport() {
     } else {
       toast(msg, 'success');
       document.getElementById('batchImportText').value = '';
+      if (typeof r.firstIndex === 'number' && r.firstIndex >= 0) _acctPage = Math.floor(r.firstIndex / ACCT_PAGE_SIZE) + 1;
       loadAccounts();
       refreshDashboard();
     }

@@ -733,7 +733,9 @@ def api_accounts_add():
     if not cfg.get("activeAccount"):
         cfg["activeAccount"] = email
     save_config(cfg)
-    return jsonify({"success": True, "email": email, "activeAccount": cfg["activeAccount"]})
+    emails = list(cfg["accounts"].keys())
+    index = emails.index(email)
+    return jsonify({"success": True, "email": email, "activeAccount": cfg["activeAccount"], "index": index})
 
 
 @app.route("/api/accounts/add-batch", methods=["POST"])
@@ -814,6 +816,16 @@ def api_accounts_add_batch():
     if added > 0:
         save_config(cfg)
 
+    new_emails = [e for _, _, e, _ in raw_items if e in existing and e not in [o["email"] for o in overwritten]]
+    first_index = -1
+    if added > 0 and existing:
+        emails = list(existing.keys())
+        for e in raw_items:
+            target = e[2]
+            if target in existing:
+                first_index = emails.index(target)
+                break
+
     return jsonify({
         "success": added > 0 or (not errors and (skipped_dup or overwritten)),
         "added": added,
@@ -822,6 +834,7 @@ def api_accounts_add_batch():
         "errors": errors,
         "total": len(existing),
         "activeAccount": cfg.get("activeAccount"),
+        "firstIndex": first_index,
     })
 
 
