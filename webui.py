@@ -281,12 +281,7 @@ def _start_proxy_instance(port):
     proxy_state["running"] = True
     proxy_state["port"] = port
 
-    _cfg = load_config()
-    _cfg["port"] = port
-
     class Handler(BaseHTTPRequestHandler):
-        config = _cfg
-
         def log_message(self, format, *args):
             pass
 
@@ -353,7 +348,7 @@ def _start_proxy_instance(port):
             self.send_header("Access-Control-Allow-Headers", "Content-Type, Authorization, x-stainless-*, X-Account-Email")
 
         def _select_account(self):
-            cfg = self.__class__.config
+            cfg = load_config()
             strategy = cfg.get("strategy", STRATEGY_SPECIFIC)
             specific_email = None
             if strategy == STRATEGY_SPECIFIC:
@@ -372,7 +367,7 @@ def _start_proxy_instance(port):
 
             email, acct, token = self._select_account()
             if not token:
-                retry = next_available_in(self.__class__.config)
+                retry = next_available_in(load_config())
                 self.send_response(429)
                 self.send_header("Content-Type", "application/json")
                 self.send_header("Retry-After", str(retry))
@@ -424,14 +419,14 @@ def _start_proxy_instance(port):
             try:
                 conn.request(self.command, path, body=body, headers=uh)
                 resp = conn.getresponse()
+                cur_cfg = load_config()
                 set_auth = resp.getheader("set-auth-token")
                 if set_auth and email:
-                    cfg = self.__class__.config
-                    if email in cfg.get("accounts", {}):
-                        cfg["accounts"][email]["token"] = set_auth
-                        save_config(cfg)
+                    if email in cur_cfg.get("accounts", {}):
+                        cur_cfg["accounts"][email]["token"] = set_auth
+                        save_config(cur_cfg)
                 status = resp.status
-                out_status, retry_secs = handle_upstream_status(email, status, self.__class__.config)
+                out_status, retry_secs = handle_upstream_status(email, status, cur_cfg)
                 rewritten = out_status != status
 
                 if rewritten:

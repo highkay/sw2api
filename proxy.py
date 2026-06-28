@@ -289,8 +289,6 @@ def get_active_token(cfg=None):
 # ─── HTTP Handler ───────────────────────────────────────────────
 
 class ProxyHandler(BaseHTTPRequestHandler):
-    config = None
-
     def log_message(self, format, *args):
         ts = time.strftime("%H:%M:%S")
         print(f"[{ts}] {args[0]}")
@@ -328,7 +326,7 @@ class ProxyHandler(BaseHTTPRequestHandler):
         """Select an account for this request based on strategy.
         Returns (email, account_info, token) or (None, None, None).
         """
-        cfg = self.__class__.config
+        cfg = load_config()
         if not cfg:
             return None, None, None
 
@@ -352,8 +350,9 @@ class ProxyHandler(BaseHTTPRequestHandler):
         email, acct, token = self._select_request_account()
         if not token:
             ts = time.strftime("%H:%M:%S")
-            retry = next_available_in(self.__class__.config)
-            print(f"[{ts}] No available account (strategy={self.__class__.config.get('strategy', '?')}), retry in {retry}s")
+            cur_cfg = load_config()
+            retry = next_available_in(cur_cfg)
+            print(f"[{ts}] No available account (strategy={cur_cfg.get('strategy', '?')}), retry in {retry}s")
             self.send_response(429)
             self.send_header("Content-Type", "application/json")
             self.send_header("Retry-After", str(retry))
@@ -420,13 +419,13 @@ class ProxyHandler(BaseHTTPRequestHandler):
             if set_auth:
                 ts = time.strftime("%H:%M:%S")
                 print(f"[{ts}] Token rotated for {email}")
-                cfg = self.__class__.config
+                cfg = load_config()
                 if email in cfg.get("accounts", {}):
                     cfg["accounts"][email]["token"] = set_auth
                     save_config(cfg)
 
             status = resp.status
-            out_status, retry_secs = handle_upstream_status(email, status, self.__class__.config)
+            out_status, retry_secs = handle_upstream_status(email, status, load_config())
             rewritten = out_status != status
 
             if rewritten:
@@ -557,8 +556,6 @@ def main():
             print("! No accounts found. Add accounts via the WebUI or directly in config.")
         if not cfg.get("accounts"):
             print("  Continuing without accounts. Requests will return 429.")
-
-    ProxyHandler.config = cfg
 
     port = args.port or cfg.get("port", DEFAULT_PORT)
     server = HTTPServer(("0.0.0.0", port), ProxyHandler)
