@@ -34,6 +34,8 @@ from proxy import (
     STRATEGY_SPECIFIC, STRATEGY_FILL_FIRST,
     select_account, get_account_state, AccountState,
     handle_upstream_status, next_available_in, resolve_model,
+    anthropic_request_to_openai, openai_response_to_anthropic,
+    stream_openai_to_anthropic, stream_openai_json_to_anthropic,
 )
 
 app = Flask(__name__)
@@ -295,12 +297,19 @@ def _start_proxy_instance(port):
             self.end_headers()
 
         def do_GET(self):
-            if self.path in ("/v1/models", "/models"):
+            if self.path == "/v1/models":
                 self._handle_models()
+                return
+            if self.path == "/models" or self.path.startswith("/models?"):
+                self._handle_anthropic_models()
                 return
             self._proxy()
 
         def do_POST(self):
+            path = self.path.split("?")[0]
+            if path == "/messages" or path == "/v1/messages":
+                self._handle_anthropic_messages()
+                return
             self._proxy()
 
         def _handle_models(self):
@@ -349,7 +358,7 @@ def _start_proxy_instance(port):
         def _cors(self):
             self.send_header("Access-Control-Allow-Origin", "*")
             self.send_header("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS")
-            self.send_header("Access-Control-Allow-Headers", "Content-Type, Authorization, x-stainless-*, X-Account-Email")
+            self.send_header("Access-Control-Allow-Headers", "Content-Type, Authorization, x-api-key, anthropic-version, x-stainless-*, X-Account-Email")
 
         def _select_account(self):
             cfg = load_config()
@@ -361,6 +370,257 @@ def _start_proxy_instance(port):
             if email and acct:
                 return email, acct, acct.get("token")
             return None, None, None
+
+        def _handle_anthropic_models(self):
+            models = [
+                {"id": "claude-fable-5"}, {"id": "claude-opus-4.8"}, {"id": "claude-opus-4.7"},
+                {"id": "claude-opus-4.6"}, {"id": "claude-sonnet-4.6"}, {"id": "claude-haiku-4.5"},
+                {"id": "gpt-5.5"}, {"id": "gpt-5.4"}, {"id": "gpt-5.3-codex"}, {"id": "gpt-5.3-chat"},
+                {"id": "gpt-5.4-mini"}, {"id": "gpt-5.4-nano"},
+                {"id": "gemini-3.1-pro-preview"}, {"id": "gemini-3.5-flash"},
+                {"id": "gemini-3-flash-preview"}, {"id": "gemini-3.1-flash-lite"},
+                {"id": "kimi-k2.7-code"}, {"id": "kimi-k2.6"}, {"id": "kimi-k2.5"},
+                {"id": "qwen3-32b"}, {"id": "qwen3-coder-30b-a3b-instruct"},
+                {"id": "deepseek-v4-pro"}, {"id": "deepseek-v4-flash"},
+                {"id": "glm-5.2"}, {"id": "glm-5.1"}, {"id": "glm-5v-turbo"},
+                {"id": "minimax-m3"}, {"id": "minimax-m2.7"}, {"id": "MiniMax-M2"},
+                {"id": "mimo-v2.5-pro"}, {"id": "mimo-v2.5"},
+            ]
+            now_iso = "2025-01-01T00:00:00Z"
+            data = [{"id": m["id"], "display_name": m["id"], "created_at": now_iso, "type": "model"} for m in models]
+            resp = {"data": data, "has_more": False, "first_id": data[0]["id"] if data else None, "last_id": data[-1]["id"] if data else None}
+            body = json.dumps(resp, ensure_ascii=False).encode("utf-8")
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self._cors()
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+
+        def _handle_anthropic_messages(self):
+            self._responded = False
+            cl = int(self.headers.get("Content-Length", 0))
+            raw = self.rfile.read(cl) if cl > 0 else b""
+            try:
+                anth_req = json.loads(raw.decode("utf-8")) if raw else {}
+            except Exception:
+                self.send_response(400)
+                self.send_header("Content-Type", "application/json")
+                self._cors()
+                self.end_headers()
+                self.wfile.write(json.dumps({"type": "error", "error": {"type": "invalid_request_error", "message": "Invalid JSON body"}}).encode())
+                return
+
+            req_model = anth_req.get("model", "unknown")
+            want_stream = bool(anth_req.get("stream", False))
+            oai_req = anthropic_request_to_openai(anth_req)
+            oai_req["model"] = resolve_model(oai_req.get("model") or req_model)
+            oai_req.setdefault("reasoning", {"enabled": True, "effort": "high"})
+            oai_req.setdefault("provider", {"require_parameters": True})
+            oai_req.setdefault("messages", [])
+            if oai_req["messages"] and oai_req["messages"][0].get("role") == "system":
+                oai_req["messages"][0]["content"] = SYSTEM_PROMPT + "\n\n" + oai_req["messages"][0]["content"]
+            else:
+                oai_req["messages"].insert(0, {"role": "system", "content": SYSTEM_PROMPT})
+
+            email, acct, token = self._select_account()
+            if not token:
+                retry = next_available_in(load_config())
+                self.send_response(429)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Retry-After", str(retry))
+                self._cors()
+                self.end_headers()
+                self.wfile.write(json.dumps({"type": "error", "error": {"type": "overloaded_error", "message": "All accounts are cooling down, retry later"}}).encode())
+                return
+
+            body = json.dumps(oai_req, ensure_ascii=False).encode("utf-8")
+            target = urlparse(f"https://{API_HOST}")
+            conn = HTTPSConnection(target.hostname, target.port or 443, timeout=120)
+            uh = {
+                "authorization": f"Bearer {token}",
+                "content-type": "application/json",
+                "user-agent": "ai-sdk/openai-compatible/2.0.47 ai-sdk/provider-utils/4.0.27 runtime/node.js/24",
+                "x-stagewise-client": "electron/1.13.0",
+                "Host": target.hostname,
+                "Content-Length": str(len(body)),
+                "Connection": "close",
+            }
+            try:
+                conn.request("POST", "/v1/ai/chat/completions", body=body, headers=uh)
+                resp = conn.getresponse()
+                cur_cfg = load_config()
+                set_auth = resp.getheader("set-auth-token")
+                if set_auth and email:
+                    if email in cur_cfg.get("accounts", {}):
+                        cur_cfg["accounts"][email]["token"] = set_auth
+                        save_config(cur_cfg)
+                status = resp.status
+                out_status, retry_secs = handle_upstream_status(email, status, cur_cfg)
+                if out_status != status:
+                    resp.read()
+                    err = json.dumps({"type": "error", "error": {"type": "overloaded_error", "message": "Account rate-limited or disabled, please retry"}}, ensure_ascii=False).encode()
+                    self.send_response(out_status)
+                    self.send_header("Content-Type", "application/json")
+                    if retry_secs:
+                        self.send_header("Retry-After", str(retry_secs))
+                    self._cors()
+                    self.send_header("Content-Length", str(len(err)))
+                    self.end_headers()
+                    self._responded = True
+                    try:
+                        self.wfile.write(err)
+                    except BrokenPipeError:
+                        pass
+                    conn.close()
+                    call_log.record(req_model, email, 0, 0, "fail")
+                    return
+
+                ct = resp.getheader("content-type", "")
+                upstream_streaming = "text/event-stream" in ct
+
+                if want_stream:
+                    i_tokens = 0
+                    o_tokens = 0
+                    if resp.status != 200:
+                        data = resp.read()
+                        err_msg = "Upstream error"
+                        try:
+                            err_data = json.loads(data.decode("utf-8", errors="replace"))
+                            err_msg = (err_data.get("error") or {}).get("message", str(err_data))[:200]
+                        except Exception:
+                            err_msg = data.decode("utf-8", errors="replace")[:200]
+                        body_out = json.dumps({
+                            "type": "error",
+                            "error": {"type": "api_error", "message": err_msg},
+                        }, ensure_ascii=False).encode("utf-8")
+                        self.send_response(resp.status)
+                        self.send_header("Content-Type", "application/json")
+                        self._cors()
+                        self.send_header("Content-Length", str(len(body_out)))
+                        self.end_headers()
+                        self._responded = True
+                        try:
+                            self.wfile.write(body_out)
+                        except BrokenPipeError:
+                            pass
+                        conn.close()
+                        call_log.record(req_model, email, 0, 0, "fail")
+                        return
+
+                    if upstream_streaming:
+                        self.send_response(resp.status)
+                        self.send_header("Content-Type", "text/event-stream; charset=utf-8")
+                        self.send_header("Cache-Control", "no-cache")
+                        self.send_header("Connection", "close")
+                        self._cors()
+                        self.end_headers()
+                        self._responded = True
+                        try:
+                            i_tokens, o_tokens = stream_openai_to_anthropic(resp, self.wfile, req_model)
+                        except BrokenPipeError:
+                            pass
+                    else:
+                        data = resp.read()
+                        try:
+                            oai_resp = json.loads(data.decode("utf-8", errors="replace"))
+                        except Exception:
+                            self.send_response(502)
+                            self.send_header("Content-Type", "application/json")
+                            self._cors()
+                            self.end_headers()
+                            self._responded = True
+                            self.wfile.write(json.dumps({"type": "error", "error": {"type": "api_error", "message": "Bad upstream response"}}).encode())
+                            conn.close()
+                            call_log.record(req_model, email, 0, 0, "fail")
+                            return
+
+                        self.send_response(200)
+                        self.send_header("Content-Type", "text/event-stream; charset=utf-8")
+                        self.send_header("Cache-Control", "no-cache")
+                        self.send_header("Connection", "close")
+                        self._cors()
+                        self.end_headers()
+                        self._responded = True
+                        try:
+                            i_tokens, o_tokens = stream_openai_json_to_anthropic(oai_resp, self.wfile, req_model)
+                        except BrokenPipeError:
+                            pass
+                    conn.close()
+                    if i_tokens or o_tokens:
+                        call_log.record(req_model, email, i_tokens, o_tokens)
+                    else:
+                        call_log.record(req_model, email, 0, 0, "fail")
+                    return
+
+                data = resp.read()
+                if resp.status != 200:
+                    err_msg = "Upstream error"
+                    try:
+                        err_data = json.loads(data.decode("utf-8", errors="replace"))
+                        err_msg = (err_data.get("error") or {}).get("message", str(err_data))[:200]
+                    except Exception:
+                        err_msg = data.decode("utf-8", errors="replace")[:200]
+                    body_out = json.dumps({
+                        "type": "error",
+                        "error": {"type": "api_error", "message": err_msg},
+                    }, ensure_ascii=False).encode("utf-8")
+                    self.send_response(resp.status)
+                    self.send_header("Content-Type", "application/json")
+                    self._cors()
+                    self.send_header("Content-Length", str(len(body_out)))
+                    self.end_headers()
+                    self._responded = True
+                    try:
+                        self.wfile.write(body_out)
+                    except BrokenPipeError:
+                        pass
+                    conn.close()
+                    call_log.record(req_model, email, 0, 0, "fail")
+                    return
+                try:
+                    oai_resp = json.loads(data.decode("utf-8", errors="replace"))
+                except Exception:
+                    self.send_response(502)
+                    self.send_header("Content-Type", "application/json")
+                    self._cors()
+                    self.end_headers()
+                    self._responded = True
+                    self.wfile.write(json.dumps({"type": "error", "error": {"type": "api_error", "message": "Bad upstream response"}}).encode())
+                    conn.close()
+                    call_log.record(req_model, email, 0, 0, "fail")
+                    return
+                anth_resp = openai_response_to_anthropic(oai_resp, req_model)
+                out_body = json.dumps(anth_resp, ensure_ascii=False).encode("utf-8")
+                self.send_response(200)
+                self.send_header("Content-Type", "application/json")
+                self._cors()
+                self.send_header("Content-Length", str(len(out_body)))
+                self.end_headers()
+                self._responded = True
+                try:
+                    self.wfile.write(out_body)
+                except BrokenPipeError:
+                    pass
+                conn.close()
+                u = anth_resp.get("usage", {})
+                if u.get("input_tokens") or u.get("output_tokens"):
+                    call_log.record(req_model, email, u.get("input_tokens", 0), u.get("output_tokens", 0))
+                else:
+                    call_log.record(req_model, email, 0, 0, "fail")
+            except Exception as e:
+                ts = time.strftime("%H:%M:%S")
+                print(f"[{ts}] Upstream error (anthropic) for {email}: {e}")
+                if not getattr(self, "_responded", False):
+                    try:
+                        self.send_response(502)
+                        self.send_header("Content-Type", "application/json")
+                        self._cors()
+                        self.end_headers()
+                        self.wfile.write(json.dumps({"type": "error", "error": {"type": "api_error", "message": f"Upstream error: {e}"}}).encode())
+                    except Exception:
+                        pass
+                call_log.record(req_model, email, 0, 0, "error")
 
         def _proxy(self):
             self._responded = False
@@ -400,7 +660,10 @@ def _start_proxy_instance(port):
                         req = json.loads(body.decode("utf-8"))
                         req_model = req.get("model", "unknown")
                         req["model"] = resolve_model(req["model"])
-                        req.setdefault("reasoning", {"enabled": True, "effort": "low"})
+                        reasoning_effort = req.pop("reasoning_effort", None)
+                        if reasoning_effort is not None:
+                            req.setdefault("reasoning", {})["effort"] = reasoning_effort
+                        req.setdefault("reasoning", {"enabled": True, "effort": "high"})
                         req.setdefault("provider", {"require_parameters": True})
                         req.setdefault("messages", []).insert(0, {"role": "system", "content": SYSTEM_PROMPT})
                         body = json.dumps(req, ensure_ascii=False).encode("utf-8")

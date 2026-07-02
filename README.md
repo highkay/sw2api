@@ -2,11 +2,14 @@
 
 stagewise 多账号反向代理 + Web 管理面板。OpenAI 兼容接口，支持多账号自动切号、限额冷却。
 
+同时提供 Anthropic Messages 兼容端点，方便 Claude Code、Anthropic SDK 或其他兼容客户端接入。
+
 支持**手动输入 Token** 添加账号，也支持**批量导入**（`email|token` 格式）。
 
 ## 功能
 
 - **反向代理** — 将 OpenAI 格式请求转发到 `api.stagewise.io/v1/ai/chat/completions`
+- **Anthropic 兼容** — 支持 `/messages`、`/models`，自动转换 Anthropic Messages 与 OpenAI Chat Completions 格式
 - **多账号管理** — 存储多个 stagewise 账号，自动轮换
 - **手动添加账号** — 输入邮箱 + Token 即可添加，无需 OTP 登录
 - **批量导入** — 粘贴多行 `email|token` 一键导入
@@ -31,6 +34,86 @@ python webui.py
 
 # 或命令行启动反代
 python proxy.py --port 11434 --strategy fill_first
+```
+
+## API 端点
+
+### OpenAI 兼容
+
+```text
+Base URL: http://localhost:11434/v1
+Models:   GET  /v1/models
+Chat:     POST /v1/chat/completions
+```
+
+### Anthropic 兼容
+
+```text
+Base URL: http://localhost:11434
+Models:   GET  /models
+Messages: POST /messages
+```
+
+Anthropic 端点不需要 `/v1` 前缀。请求会被转换为上游 OpenAI Chat Completions 格式，响应会再转换回 Anthropic Messages 格式。
+
+支持内容：
+
+- 非流式与流式 `messages`
+- `text`、`thinking`、`tool_use`、`tool_result` 基础转换
+- `tool_choice`：`auto`、`any`、`none`、指定 `tool`
+- OpenAI SSE 到 Anthropic SSE 的事件转换，包含递增的 `content_block.index`
+
+示例：
+
+```bash
+curl http://localhost:11434/messages \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "z-ai/glm-5.2",
+    "max_tokens": 128,
+    "messages": [
+      {"role": "user", "content": "Reply with exactly: pong"}
+    ]
+  }'
+```
+
+流式请求：
+
+```bash
+curl -N http://localhost:11434/messages \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "z-ai/glm-5.2",
+    "max_tokens": 128,
+    "stream": true,
+    "messages": [
+      {"role": "user", "content": "Reply with exactly one word: pong"}
+    ]
+  }'
+```
+
+Tool use 示例：
+
+```bash
+curl http://localhost:11434/messages \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "z-ai/glm-5.2",
+    "max_tokens": 160,
+    "tools": [{
+      "name": "get_weather",
+      "description": "Get weather for a city",
+      "input_schema": {
+        "type": "object",
+        "properties": {"city": {"type": "string"}},
+        "required": ["city"]
+      }
+    }],
+    "tool_choice": {"type": "tool", "name": "get_weather"},
+    "messages": [
+      {"role": "user", "content": "Use the tool to get weather for Paris."}
+    ]
+  }'
 ```
 
 ## 添加账号
@@ -101,6 +184,18 @@ retry 选号: A 已 disabled 被跳过 → 账号B → 成功
 - 上游 5xx → 账号冷却 30s（内存，自动恢复）+ 改写 429+Retry-After
 - 上游 401/402/403 → 账号永久 disabled，下次刷新 usage 且限额窗口 < 100% 时自动解禁
 - 所有账号都不可用 → 返回 429 + Retry-After: <最近可用账号恢复秒数>
+
+## 验证
+
+本项目当前已验证：
+
+- `python -m py_compile webui.py proxy.py call_log.py`
+- `GET /models` 返回 Anthropic 风格模型列表
+- `POST /messages` 使用 `z-ai/glm-5.2` 非流式返回 `message` JSON
+- `POST /messages` 使用 `z-ai/glm-5.2` 流式返回完整 SSE 事件序列
+- `tool_choice` 指定工具时返回 `tool_use`，流式多 content block 的 index 为 `0,1,...`
+
+注意：代理当前会默认启用 reasoning 并注入内置 system prompt，因此部分模型会优先返回 `thinking` block。这是代理行为，不是 Anthropic 端点格式错误。
 
 ## 项目结构
 
