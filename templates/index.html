@@ -50,7 +50,7 @@ tailwind.config = {
 
 <div id="tokenProgress" class="fixed top-16 right-4 z-50 hidden bg-white rounded-xl border border-slate-200 shadow-lg p-4 w-72">
   <div class="flex items-center justify-between mb-2">
-    <span class="text-sm font-semibold text-slate-900">Updating Tokens</span>
+    <span id="tokenProgressTitle" class="text-sm font-semibold text-slate-900">Updating Tokens</span>
     <span id="tokenProgressCount" class="text-xs text-slate-500">0/0</span>
   </div>
   <div class="w-full bg-slate-100 rounded-full h-2 overflow-hidden mb-2">
@@ -137,6 +137,7 @@ tailwind.config = {
         <p class="text-sm text-slate-500">Manage stagewise accounts. Usage data fetched from API.</p>
       </div>
       <div class="flex items-center gap-2 text-xs text-slate-500">
+        <button class="px-3 py-1.5 text-xs font-medium bg-emerald-600 text-white rounded-lg hover:bg-emerald-700 disabled:opacity-50" id="btnUnblockAccounts" onclick="unblockAccounts()">Unblock</button>
         <button class="px-3 py-1.5 text-xs font-medium bg-amber-600 text-white rounded-lg hover:bg-amber-700 disabled:opacity-50" id="btnUpdateTokens" onclick="updateAllTokens()">Update</button>
         <button class="px-3 py-1.5 text-xs font-medium bg-indigo-600 text-white rounded-lg hover:bg-indigo-700" onclick="loadAccounts(false, true)">Refresh</button>
       </div>
@@ -473,15 +474,7 @@ const ACCT_COLS = 3;
 async function loadAccounts(silent, withEnable) {
   const r = await api(`/api/accounts?page=${_acctPage}&per_page=${ACCT_PAGE_SIZE}${withEnable?'&refresh=1':''}`, {silent:true});
   if (!r) { document.getElementById('accountsList').innerHTML = '<span class="text-red-600 text-sm">Failed to load accounts</span>'; return; }
-  const incoming = r.accounts || [];
-  const prevMap = {};
-  if (_accountsData) _accountsData.forEach(a => { prevMap[a.email] = a; });
-  _accountsData = incoming.map(a => {
-    const old = prevMap[a.email];
-    if (old && a.usage === null && old.usage) a.usage = old.usage;
-    if (old && a.expiresAt === null && old.expiresAt) a.expiresAt = old.expiresAt;
-    return a;
-  });
+  mergeAccountsData(r.accounts || []);
   const maxPage = Math.max(1, Math.ceil(_accountsData.length / ACCT_PAGE_SIZE));
   if (_acctPage > maxPage) _acctPage = maxPage;
   renderAccounts();
@@ -490,6 +483,17 @@ async function loadAccounts(silent, withEnable) {
     toast(`Refreshed page ${_acctPage}${en>0?` · ${en} re-enabled`:''}`, 'success');
     refreshAccounts();
   }
+}
+
+function mergeAccountsData(incoming) {
+  const prevMap = {};
+  if (_accountsData) _accountsData.forEach(a => { prevMap[a.email] = a; });
+  _accountsData = incoming.map(a => {
+    const old = prevMap[a.email];
+    if (old && a.usage === null && old.usage) a.usage = old.usage;
+    if (old && a.expiresAt === null && old.expiresAt) a.expiresAt = old.expiresAt;
+    return a;
+  });
 }
 
 function renderAccounts() {
@@ -561,7 +565,74 @@ function renderAccounts() {
 
 function goAcctPage(p) {
   _acctPage = p;
-  loadAccounts(true);
+  renderAccounts();
+}
+
+let _unblockRunning = false;
+
+async function unblockAccounts() {
+  if (_unblockRunning) return;
+  if (_tokenUpdateRunning) { toast('Token update is running', 'error'); return; }
+  const btn = document.getElementById('btnUnblockAccounts');
+  if (btn) btn.disabled = true;
+  _unblockRunning = true;
+
+  const prog = document.getElementById('tokenProgress');
+  const title = document.getElementById('tokenProgressTitle');
+  const fill = document.getElementById('tokenProgressFill');
+  const label = document.getElementById('tokenProgressLabel');
+  const count = document.getElementById('tokenProgressCount');
+  title.textContent = 'Unblocking Accounts';
+  prog.classList.remove('hidden');
+  fill.style.width = '0%';
+  count.textContent = '0/0';
+  label.textContent = 'Starting...';
+
+  if (!_accountsData || _accountsData.length === 0) {
+    const initial = await api('/api/accounts?page=1&per_page=1', {silent:true, throwErr:false});
+    if (!initial || !initial.accounts) {
+      toast('Unblock failed: unable to load accounts', 'error');
+      if (btn) btn.disabled = false;
+      _unblockRunning = false;
+      prog.classList.add('hidden');
+      return;
+    }
+    mergeAccountsData(initial.accounts);
+    renderAccounts();
+  }
+
+  let total = _accountsData?.length || 0;
+  let totalPages = Math.max(1, Math.ceil((total || ACCT_PAGE_SIZE) / ACCT_PAGE_SIZE));
+  let enabled = 0;
+  let failed = 0;
+
+  for (let page = 1; page <= totalPages; page++) {
+    label.textContent = `Refreshing page ${page}/${totalPages}`;
+    const r = await api(`/api/accounts?page=${page}&per_page=${ACCT_PAGE_SIZE}&refresh=1`, {silent:true, throwErr:false});
+    if (!r || !r.accounts) {
+      failed++;
+    } else {
+      total = r.total || r.accounts.length || total;
+      totalPages = Math.max(1, Math.ceil(total / ACCT_PAGE_SIZE));
+      enabled += r.enabled || 0;
+      mergeAccountsData(r.accounts);
+      const maxPage = Math.max(1, Math.ceil(_accountsData.length / ACCT_PAGE_SIZE));
+      if (_acctPage > maxPage) _acctPage = maxPage;
+      renderAccounts();
+    }
+    const done = total ? Math.min(page * ACCT_PAGE_SIZE, total) : page;
+    const pct = total ? Math.round((done / total) * 100) : 0;
+    fill.style.width = pct + '%';
+    count.textContent = total ? `${done}/${total}` : `${page}/${totalPages}`;
+    await new Promise(res => setTimeout(res, 200));
+  }
+
+  refreshDashboard();
+  label.textContent = failed ? `Done · ${enabled} re-enabled, ${failed} pages failed` : `Done · ${enabled} re-enabled`;
+  toast(`Unblock complete: ${enabled} re-enabled${failed?`, ${failed} pages failed`:''}`, failed ? 'error' : 'success');
+  setTimeout(() => prog.classList.add('hidden'), 4000);
+  if (btn) btn.disabled = false;
+  _unblockRunning = false;
 }
 
 // ─── Update All Tokens (refresh one by one, earliest expiry first) ───
@@ -569,6 +640,7 @@ let _tokenUpdateRunning = false;
 
 async function updateAllTokens() {
   if (_tokenUpdateRunning) return;
+  if (_unblockRunning) { toast('Unblock is running', 'error'); return; }
   const btn = document.getElementById('btnUpdateTokens');
   if (btn) btn.disabled = true;
   _tokenUpdateRunning = true;
@@ -596,8 +668,10 @@ async function updateAllTokens() {
 
   const prog = document.getElementById('tokenProgress');
   const fill = document.getElementById('tokenProgressFill');
+  const title = document.getElementById('tokenProgressTitle');
   const label = document.getElementById('tokenProgressLabel');
   const count = document.getElementById('tokenProgressCount');
+  title.textContent = 'Updating Tokens';
   prog.classList.remove('hidden');
   fill.style.width = '0%';
   count.textContent = `0/${total}`;

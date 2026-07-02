@@ -651,6 +651,7 @@ def stream_openai_to_anthropic(resp, wfile, model):
 
                 u = d.get("usage") or {}
                 if u:
+                    input_tokens = u.get("prompt_tokens", 0) or input_tokens
                     output_tokens = u.get("completion_tokens", 0) or output_tokens
                     pt_details = u.get("prompt_tokens_details") or {}
                     cache_read = pt_details.get("cached_tokens", 0) or cache_read
