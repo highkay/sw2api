@@ -33,7 +33,7 @@ import call_log
 from proxy import (
     STRATEGY_SPECIFIC, STRATEGY_FILL_FIRST,
     select_account, get_account_state, AccountState,
-    handle_upstream_status, next_available_in, resolve_model,
+    handle_upstream_status, handle_upstream_response, next_available_in, resolve_model,
     anthropic_request_to_openai, openai_response_to_anthropic,
     stream_openai_to_anthropic, stream_openai_json_to_anthropic,
 )
@@ -122,6 +122,23 @@ def api_request(method, path, token=None, body=None, timeout=15):
         return {"status": resp.status, "headers": resp_headers, "body": raw, "json": j}
     except Exception as e:
         return {"status": 0, "headers": {}, "body": str(e), "json": None}
+
+
+def _window_percent(window):
+    try:
+        return float(window.get("usedPercent", 0) or 0)
+    except (TypeError, ValueError):
+        return 0.0
+
+
+def usage_windows_exceeded(usage):
+    windows = (usage or {}).get("windows") or []
+    return any(w.get("exceeded") or _window_percent(w) >= 100 for w in windows)
+
+
+def usage_windows_clear(usage):
+    windows = (usage or {}).get("windows") or []
+    return bool(windows) and all(not w.get("exceeded") and _window_percent(w) < 100 for w in windows)
 
 
 # ─── Health / Dashboard ────────────────────────────────────────
@@ -456,9 +473,10 @@ def _start_proxy_instance(port):
                         cur_cfg["accounts"][email]["token"] = set_auth
                         save_config(cur_cfg)
                 status = resp.status
-                out_status, retry_secs = handle_upstream_status(email, status, cur_cfg)
+                out_status, retry_secs, pre_read_body = handle_upstream_response(email, resp, cur_cfg)
                 if out_status != status:
-                    resp.read()
+                    if pre_read_body is None:
+                        resp.read()
                     err = json.dumps({"type": "error", "error": {"type": "overloaded_error", "message": "Account rate-limited or disabled, please retry"}}, ensure_ascii=False).encode()
                     self.send_response(out_status)
                     self.send_header("Content-Type", "application/json")
@@ -483,7 +501,7 @@ def _start_proxy_instance(port):
                     i_tokens = 0
                     o_tokens = 0
                     if resp.status != 200:
-                        data = resp.read()
+                        data = pre_read_body if pre_read_body is not None else resp.read()
                         err_msg = "Upstream error"
                         try:
                             err_data = json.loads(data.decode("utf-8", errors="replace"))
@@ -521,7 +539,7 @@ def _start_proxy_instance(port):
                         except BrokenPipeError:
                             pass
                     else:
-                        data = resp.read()
+                        data = pre_read_body if pre_read_body is not None else resp.read()
                         try:
                             oai_resp = json.loads(data.decode("utf-8", errors="replace"))
                         except Exception:
@@ -553,7 +571,7 @@ def _start_proxy_instance(port):
                         call_log.record(req_model, email, 0, 0, "fail")
                     return
 
-                data = resp.read()
+                data = pre_read_body if pre_read_body is not None else resp.read()
                 if resp.status != 200:
                     err_msg = "Upstream error"
                     try:
@@ -692,11 +710,12 @@ def _start_proxy_instance(port):
                         cur_cfg["accounts"][email]["token"] = set_auth
                         save_config(cur_cfg)
                 status = resp.status
-                out_status, retry_secs = handle_upstream_status(email, status, cur_cfg)
+                out_status, retry_secs, pre_read_body = handle_upstream_response(email, resp, cur_cfg)
                 rewritten = out_status != status
 
                 if rewritten:
-                    resp.read()
+                    if pre_read_body is None:
+                        resp.read()
                     body_out = json.dumps({
                         "error": {
                             "message": "Account rate-limited or disabled, please retry",
@@ -738,7 +757,7 @@ def _start_proxy_instance(port):
                 model = "unknown"
                 i_tokens = 0
                 o_tokens = 0
-                if "text/event-stream" in ct:
+                if "text/event-stream" in ct and pre_read_body is None:
                     last_chunk = None
                     while True:
                         chunk = resp.read(4096)
@@ -763,7 +782,7 @@ def _start_proxy_instance(port):
                                 except Exception:
                                     pass
                 else:
-                    data = resp.read()
+                    data = pre_read_body if pre_read_body is not None else resp.read()
                     self.wfile.write(data)
                     if resp.status == 200:
                         try:
@@ -898,6 +917,19 @@ def api_accounts():
                 pass
 
     enabled_count = 0
+    disabled_count = 0
+    changed = False
+    for email in page_emails:
+        acct = accounts.get(email)
+        if not acct:
+            continue
+        usage = entries[email].get("usage")
+        if usage and usage_windows_exceeded(usage) and not acct.get("disabled"):
+            cfg["accounts"][email]["disabled"] = True
+            entries[email]["disabled"] = True
+            disabled_count += 1
+            changed = True
+
     if refresh:
         for email in page_emails:
             acct = accounts.get(email)
@@ -906,15 +938,24 @@ def api_accounts():
             usage = entries[email].get("usage")
             if not usage:
                 continue
-            windows = usage.get("windows", [])
-            if windows and all(w.get("usedPercent", 0) < 100 for w in windows):
+            if usage_windows_clear(usage):
                 cfg["accounts"][email]["disabled"] = False
                 entries[email]["disabled"] = False
                 enabled_count += 1
-        if enabled_count > 0:
-            save_config(cfg)
+                changed = True
 
-    return jsonify({"accounts": list(entries.values()), "activeAccount": active, "total": total, "page": page, "per_page": per_page, "enabled": enabled_count})
+    if changed:
+        save_config(cfg)
+
+    return jsonify({
+        "accounts": list(entries.values()),
+        "activeAccount": active,
+        "total": total,
+        "page": page,
+        "per_page": per_page,
+        "enabled": enabled_count,
+        "disabled": disabled_count,
+    })
 
 
 @app.route("/api/accounts/switch", methods=["POST"])
@@ -947,20 +988,22 @@ def api_accounts_refresh_usage():
         return jsonify({"success": True, "enabled": 0, "total": 0})
 
     enabled_count = 0
+    disabled_count = 0
     lock = threading.Lock()
 
     def check_and_enable(email, acct):
-        nonlocal enabled_count
-        if not acct.get("disabled"):
-            return
+        nonlocal enabled_count, disabled_count
         token = acct.get("token")
         if not token:
             return
         usage_res = api_request("GET", "/v1/usage/current", token, timeout=10)
         if usage_res["status"] == 200 and usage_res.get("json"):
-            windows = usage_res["json"].get("windows", [])
-            all_clear = all(w.get("usedPercent", 0) < 100 for w in windows)
-            if all_clear:
+            usage = usage_res["json"]
+            if usage_windows_exceeded(usage) and not acct.get("disabled"):
+                with lock:
+                    cfg["accounts"][email]["disabled"] = True
+                    disabled_count += 1
+            elif acct.get("disabled") and usage_windows_clear(usage):
                 with lock:
                     cfg["accounts"][email]["disabled"] = False
                     enabled_count += 1
@@ -968,10 +1011,10 @@ def api_accounts_refresh_usage():
     with ThreadPoolExecutor(max_workers=16) as pool:
         list(pool.map(lambda x: check_and_enable(*x), accounts.items()))
 
-    if enabled_count > 0:
+    if enabled_count > 0 or disabled_count > 0:
         save_config(cfg)
 
-    return jsonify({"success": True, "enabled": enabled_count, "total": len(accounts)})
+    return jsonify({"success": True, "enabled": enabled_count, "disabled": disabled_count, "total": len(accounts)})
 
 @app.route("/api/accounts/refresh-token", methods=["POST"])
 def api_accounts_refresh_token():

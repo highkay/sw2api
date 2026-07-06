@@ -152,6 +152,23 @@ def handle_upstream_status(email, status, cfg, body=None):
     return status, None
 
 
+def handle_upstream_response(email, resp, cfg):
+    """Inspect an upstream response and apply account state changes.
+
+    Returns (out_status, retry_seconds, body). For 402/403, body is pre-read so
+    limit errors can be detected from the upstream JSON; callers must reuse it
+    when passing the response through.
+    """
+    status = resp.status
+    body = None
+    if status in (402, 403):
+        body = resp.read()
+        out_status, retry = handle_upstream_status(email, status, cfg, body)
+    else:
+        out_status, retry = handle_upstream_status(email, status, cfg)
+    return out_status, retry, body
+
+
 def next_available_in(cfg, now=None):
     """Seconds until the next cooled-down account becomes available."""
     if now is None:
@@ -926,11 +943,12 @@ class ProxyHandler(BaseHTTPRequestHandler):
                     save_config(cfg)
 
             status = resp.status
-            out_status, retry_secs = handle_upstream_status(email, status, load_config())
+            out_status, retry_secs, pre_read_body = handle_upstream_response(email, resp, load_config())
             rewritten = out_status != status
 
             if rewritten:
-                resp.read()
+                if pre_read_body is None:
+                    resp.read()
                 body_out = json.dumps({
                     "error": {
                         "message": "Account rate-limited or disabled, please retry",
@@ -975,7 +993,7 @@ class ProxyHandler(BaseHTTPRequestHandler):
             model = "unknown"
             i_tokens = 0
             o_tokens = 0
-            if streaming:
+            if streaming and pre_read_body is None:
                 last_data = None
                 while True:
                     chunk = resp.read(4096)
@@ -1000,7 +1018,7 @@ class ProxyHandler(BaseHTTPRequestHandler):
                             except Exception:
                                 pass
             else:
-                data = resp.read()
+                data = pre_read_body if pre_read_body is not None else resp.read()
                 self.wfile.write(data)
                 if resp.status == 200:
                     try:
@@ -1114,11 +1132,12 @@ class ProxyHandler(BaseHTTPRequestHandler):
                     save_config(cfg)
 
             status = resp.status
-            out_status, retry_secs = handle_upstream_status(email, status, load_config())
+            out_status, retry_secs, pre_read_body = handle_upstream_response(email, resp, load_config())
             rewritten = out_status != status
 
             if rewritten:
-                resp.read()
+                if pre_read_body is None:
+                    resp.read()
                 err_body = json.dumps({
                     "type": "error",
                     "error": {
@@ -1149,7 +1168,7 @@ class ProxyHandler(BaseHTTPRequestHandler):
                 i_tokens = 0
                 o_tokens = 0
                 if resp.status != 200:
-                    data = resp.read()
+                    data = pre_read_body if pre_read_body is not None else resp.read()
                     err_msg = "Upstream error"
                     try:
                         err_data = json.loads(data.decode("utf-8", errors="replace"))
@@ -1187,7 +1206,7 @@ class ProxyHandler(BaseHTTPRequestHandler):
                     except BrokenPipeError:
                         pass
                 else:
-                    data = resp.read()
+                    data = pre_read_body if pre_read_body is not None else resp.read()
                     try:
                         oai_resp = json.loads(data.decode("utf-8", errors="replace"))
                     except Exception:
@@ -1223,7 +1242,7 @@ class ProxyHandler(BaseHTTPRequestHandler):
                 return
 
             # Non-streaming
-            data = resp.read()
+            data = pre_read_body if pre_read_body is not None else resp.read()
             if resp.status != 200:
                 err_msg = "Upstream error"
                 try:
