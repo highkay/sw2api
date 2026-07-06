@@ -802,8 +802,6 @@ def api_proxy_start():
     if proxy_state["running"]:
         return jsonify({"error": "Proxy already running"}), 400
     cfg = load_config()
-    if not cfg.get("accounts"):
-        return jsonify({"error": "No accounts. Add an account first."}), 401
     port = request.json.get("port", 11434) if request.json else 11434
     proxy_state["port"] = port
     proxy_state["running"] = True
@@ -1231,20 +1229,18 @@ def main():
     parser.add_argument("--debug", action="store_true", help="Enable Flask debug mode")
     args = parser.parse_args()
 
-    # Auto-start proxy
+    # Auto-start proxy. With no accounts, proxy endpoints still respond and
+    # chat requests return 429 until accounts are added.
     cfg = load_config()
     proxy_port = cfg.get("port", 11434)
-    if cfg.get("accounts"):
-        import threading, time
-        def auto_start():
-            time.sleep(0.5)
-            from http.server import HTTPServer
-            from http.server import BaseHTTPRequestHandler
-            _start_proxy_instance(proxy_port)
-        t = threading.Thread(target=auto_start, daemon=True)
-        t.start()
-    else:
-        print("-> No accounts. Proxy not started. Add accounts at /accounts to get started.")
+    if not cfg.get("accounts"):
+        print("-> No accounts. Proxy will return 429 for chat requests until accounts are added.")
+    import threading, time
+    def auto_start():
+        time.sleep(0.5)
+        _start_proxy_instance(proxy_port)
+    t = threading.Thread(target=auto_start, daemon=True)
+    t.start()
 
     print()
     print("=" * 50)
