@@ -1,0 +1,25 @@
+services:
+  sw2api:
+    image: ghcr.io/highkay/sw2api:latest
+    pull_policy: always
+    container_name: sw2api
+    restart: unless-stopped
+    environment:
+      TZ: Asia/Shanghai
+    ports:
+      - "8080:8080"
+      - "11434:11434"
+    volumes:
+      - ./data:/app/data
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "python",
+          "-c",
+          "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8080/api/status', timeout=5).read()",
+        ]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
