@@ -91,12 +91,26 @@ def get_account_state(email):
         return _account_states[email]
 
 
-def handle_upstream_status(email, status, cfg):
+def _looks_like_plan_limit(body):
+    if body is None:
+        return False
+    if isinstance(body, bytes):
+        body = body.decode("utf-8", errors="replace")
+    text = str(body).lower()
+    return (
+        "plan_limit_exceeded" in text
+        or "plan limit" in text
+        or "limit exceeded" in text
+        or "quota exceeded" in text
+    )
+
+
+def handle_upstream_status(email, status, cfg, body=None):
     """Apply cooldown/disable based on upstream status.
     Returns (out_status, retry_seconds):
-      - out_status: status to send to client (403 -> 429 so downstream retries)
+      - out_status: status to send to client
       - retry_seconds: Retry-After hint, or None
-    403 (plan limit) -> disable account, re-enabled by refresh-usage.
+    Only explicit plan/quota limit 402/403 responses disable an account.
     """
     if not email:
         return status, None
@@ -123,6 +137,10 @@ def handle_upstream_status(email, status, cfg):
         return 429, COOLDOWN_429
 
     if status in (402, 403):
+        if not _looks_like_plan_limit(body):
+            ts = time.strftime("%H:%M:%S")
+            print(f"[{ts}] {email} upstream returned {status}; passing through without disabling")
+            return status, None
         if email in cfg.get("accounts", {}):
             cfg["accounts"][email]["disabled"] = True
             save_config(cfg)
